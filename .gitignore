@@ -1,0 +1,42 @@
+# --- Node / npm ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json.bak
+
+# --- Environment / secrets (never commit credentials!) ---
+.env
+.env.*
+!.env.example
+
+# --- Playwright artifacts ---
+playwright/.auth/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# --- Local probes / scratch ---
+probe-*.js
+*.local.js
+snapshots/
+tmp/
+.tmp/
+_legacy/
+
+# --- Editor / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# --- Reports & coverage ---
+coverage/
+*.lcov
+
+# --- Optional build artifacts (none today, future-proofing) ---
+dist/
+build/
