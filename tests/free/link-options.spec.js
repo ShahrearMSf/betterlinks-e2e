@@ -106,12 +106,19 @@ test.describe('Link Options Tests', () => {
     await linksPage.clickEditLink(title);
     await linksPage.setLinkOption('nofollow', true);
     await linksPage.submitButton.click();
-    await waitForToast(page, 'success').catch(() => null);
+    // Wait for the modal to actually close (= save finished). The toast has
+    // been flaky on the live site under CI network latency, so key off the
+    // modal instead.
+    await linksPage.modal.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => null);
 
+    // Poll the REST API until the change is visible (max ~10s) — accounts for
+    // write-path replication delay on the live site.
     const api = new BetterLinksAPI(page);
-    const res = await api.getLinks();
-    const link = findLink(res, slug);
-    expect(Number(link?.nofollow)).toBeTruthy();
+    await expect.poll(async () => {
+      const res = await api.getLinks();
+      const link = findLink(res, slug);
+      return Number(link?.nofollow) || 0;
+    }, { timeout: 10000, intervals: [500, 1000, 1500, 2000] }).toBeTruthy();
   });
 
   test('should create link with multiple options enabled', async ({ page }) => {
