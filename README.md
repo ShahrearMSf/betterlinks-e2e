@@ -3,7 +3,7 @@
 <br />
 <div align="center">
   <a href="https://betterlinks.io">
-    <img src="https://betterlinks.io/wp-content/uploads/2022/03/Betterlinks-site-icon.svg" alt="BetterLinks" width="80" height="80">
+    <img src="https://ps.w.org/betterlinks/assets/icon-256x256.gif" alt="BetterLinks" width="96" height="96" style="object-fit:contain;">
   </a>
 
   <h3 align="center">BetterLinks E2E Test Automation</h3>
@@ -243,8 +243,16 @@ Enable GitHub Pages under Settings → Pages (source: "GitHub Actions") so the r
 
 ## Contact
 
-Muammar Shahrear — <shahrearmuammar@gmail.com>
-LinkedIn: <https://www.linkedin.com/in/muammarshahrear/>
+Muammar Shahrear — [@Muammar Shahrear](https://www.linkedin.com/in/muammarshahrear/) — shahrearmuammar@gmail.com
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## About the Author
+
+**Muammar Shahrear** is a software tester and researcher specializing in test automation, AI agents, WordPress plugin testing, and SaaS product quality assurance. He completed his B.Sc. and M.Sc. from the Institute of Information Technology (IIT), Jahangirnagar University (JU), Bangladesh, and also holds an M.Sc. from Technische Hochschule Mittelhessen (THM), Germany.
+
+- [![LinkedIn][LinkedIn-shield]][LinkedIn-url]
+- [![Google Scholar][Scholar-shield]][Scholar-url]
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -253,5 +261,12 @@ LinkedIn: <https://www.linkedin.com/in/muammarshahrear/>
 * [Playwright](https://playwright.dev)
 * [BetterLinks](https://betterlinks.io)
 * [notificationx-e2e](https://github.com/ShahrearMSf/notificationx-e2e) — error-handling patterns
+* [othneildrew/Best-README-Template](https://github.com/othneildrew/Best-README-Template)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+[LinkedIn-shield]: https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white
+[LinkedIn-url]: https://www.linkedin.com/in/muammarshahrear/
+[Scholar-shield]: https://img.shields.io/badge/Google_Scholar-4285F4?style=for-the-badge&logo=googlescholar&logoColor=white
+[Scholar-url]: https://scholar.google.com/citations?user=nPKujs4AAAAJ
