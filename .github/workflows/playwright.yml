@@ -1,12 +1,13 @@
 name: BetterLinks E2E - Playwright Tests
 
 on:
-  # Monday & Wednesday at 4:00 AM Bangladesh Time (UTC+6) → 22:00 UTC previous day
-  # Cron DoW: Sun=0, Mon=1, ... Sat=6. We schedule UTC Sun (=> BD Mon 04:00)
-  # and UTC Tue (=> BD Wed 04:00).
+  # Cron DoW: Sun=0, Mon=1, ... Sat=6. Bangladesh Time is UTC+6.
   schedule:
+    # Monday & Wednesday 04:00 BD → 22:00 UTC Sun & Tue → routes to SLACK_WEBHOOK_URL
     - cron: "0 22 * * 0,2"
-  # Manual trigger from the Actions tab
+    # Friday & Saturday 05:00 BD → 23:00 UTC Thu & Fri → routes to SLACK_WEBHOOK_URL_2
+    - cron: "0 23 * * 4,5"
+  # Manual trigger from the Actions tab (always uses SLACK_WEBHOOK_URL)
   workflow_dispatch:
 
 permissions:
@@ -242,8 +243,16 @@ jobs:
           }
           EOF
 
-      - name: Send to Slack
-        if: always()
+      - name: Determine which webhook to use
+        id: webhook-route
+        run: |
+          # Bangladesh time day-of-week (1=Mon, 2=Tue, ..., 7=Sun)
+          # Friday=5, Saturday=6 → secondary webhook; everything else → primary.
+          DAY_OF_WEEK=$(TZ='Asia/Dhaka' date +%u)
+          echo "day=$DAY_OF_WEEK" >> $GITHUB_OUTPUT
+
+      - name: Send to Slack Webhook 1 (Mon/Wed runs & all manual dispatches)
+        if: always() && (github.event_name != 'schedule' || (steps.webhook-route.outputs.day != '5' && steps.webhook-route.outputs.day != '6'))
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -251,7 +260,21 @@ jobs:
             curl -X POST "$SLACK_WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
               -d @/tmp/slack-payload.json
-            echo "Slack notification sent"
+            echo "Slack webhook 1 sent"
           else
-            echo "SLACK_WEBHOOK_URL secret not set, skipping"
+            echo "SLACK_WEBHOOK_URL not set, skipping"
+          fi
+
+      - name: Send to Slack Webhook 2 (Fri/Sat scheduled runs)
+        if: always() && github.event_name == 'schedule' && (steps.webhook-route.outputs.day == '5' || steps.webhook-route.outputs.day == '6')
+        env:
+          SLACK_WEBHOOK_URL_2: ${{ secrets.SLACK_WEBHOOK_URL_2 }}
+        run: |
+          if [ -n "$SLACK_WEBHOOK_URL_2" ]; then
+            curl -X POST "$SLACK_WEBHOOK_URL_2" \
+              -H 'Content-Type: application/json' \
+              -d @/tmp/slack-payload.json
+            echo "Slack webhook 2 sent"
+          else
+            echo "SLACK_WEBHOOK_URL_2 not set, skipping"
           fi
