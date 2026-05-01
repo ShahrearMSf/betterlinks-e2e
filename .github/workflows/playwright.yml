@@ -5,8 +5,8 @@ on:
   schedule:
     # Monday & Wednesday 04:00 BD → 22:00 UTC Sun & Tue → routes to SLACK_WEBHOOK_URL
     - cron: "0 22 * * 0,2"
-    # Friday & Saturday 05:00 BD → 23:00 UTC Thu & Fri → routes to SLACK_WEBHOOK_URL_2
-    - cron: "0 23 * * 4,5"
+    # Friday 09:00 BD → 03:00 UTC Fri → routes to SLACK_WEBHOOK_URL_2
+    - cron: "0 3 * * 5"
   # Manual trigger from the Actions tab (always uses SLACK_WEBHOOK_URL)
   workflow_dispatch:
 
@@ -246,13 +246,13 @@ jobs:
       - name: Determine which webhook to use
         id: webhook-route
         run: |
-          # Bangladesh time day-of-week (1=Mon, 2=Tue, ..., 7=Sun)
-          # Friday=5, Saturday=6 → secondary webhook; everything else → primary.
+          # Bangladesh time day-of-week (1=Mon, 2=Tue, ..., 7=Sun).
+          # Friday=5 → secondary webhook; everything else → primary.
           DAY_OF_WEEK=$(TZ='Asia/Dhaka' date +%u)
           echo "day=$DAY_OF_WEEK" >> $GITHUB_OUTPUT
 
       - name: Send to Slack Webhook 1 (Mon/Wed runs & all manual dispatches)
-        if: always() && (github.event_name != 'schedule' || (steps.webhook-route.outputs.day != '5' && steps.webhook-route.outputs.day != '6'))
+        if: always() && (github.event_name != 'schedule' || steps.webhook-route.outputs.day != '5')
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -265,8 +265,8 @@ jobs:
             echo "SLACK_WEBHOOK_URL not set, skipping"
           fi
 
-      - name: Send to Slack Webhook 2 (Fri/Sat scheduled runs)
-        if: always() && github.event_name == 'schedule' && (steps.webhook-route.outputs.day == '5' || steps.webhook-route.outputs.day == '6')
+      - name: Send to Slack Webhook 2 (Friday scheduled run only)
+        if: always() && github.event_name == 'schedule' && steps.webhook-route.outputs.day == '5'
         env:
           SLACK_WEBHOOK_URL_2: ${{ secrets.SLACK_WEBHOOK_URL_2 }}
         run: |
