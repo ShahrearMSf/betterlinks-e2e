@@ -200,7 +200,7 @@ A workflow ships at `.github/workflows/playwright.yml` that:
 
 - Runs on **two** schedules:
   - **Mon & Wed 04:00 Bangladesh Time** (`0 22 * * 0,2` UTC) → routes results to `SLACK_WEBHOOK_URL`
-  - **Fri & Sat 05:00 Bangladesh Time** (`0 23 * * 4,5` UTC) → routes results to `SLACK_WEBHOOK_URL_2`
+  - **Fri 09:00 Bangladesh Time** (`0 3 * * 5` UTC) → routes results to `SLACK_WEBHOOK_URL_2`
 - Supports **manual dispatch** from the Actions tab (always posts to `SLACK_WEBHOOK_URL`)
 - Uploads the HTML report as a build artifact **and** publishes it to GitHub Pages
 - Posts a summary card to **Slack** (pass / fail / flaky / skipped counts + report link)
