@@ -198,10 +198,8 @@ Patterns borrowed (and adapted) from the sibling [notificationx-e2e](https://git
 
 A workflow ships at `.github/workflows/playwright.yml` that:
 
-- Runs on **two** schedules:
-  - **Mon & Wed 04:00 Bangladesh Time** (`0 22 * * 0,2` UTC) → routes results to `SLACK_WEBHOOK_URL`
-  - **Fri 10:00 Bangladesh Time** (`0 4 * * 5` UTC) → routes results to `SLACK_WEBHOOK_URL_2`
-- Supports **manual dispatch** from the Actions tab (always posts to `SLACK_WEBHOOK_URL`)
+- Runs on a **Mon & Wed 04:00 Bangladesh Time** schedule (`0 22 * * 0,2` UTC)
+- Supports **manual dispatch** from the Actions tab
 - Uploads the HTML report as a build artifact **and** publishes it to GitHub Pages
 - Posts a summary card to **Slack** (pass / fail / flaky / skipped counts + report link)
 
@@ -212,8 +210,7 @@ Add these repository secrets (Settings → Secrets and variables → Actions):
 | `BASE_URL` | Live WP site to run against |
 | `ADMIN_USER` | Admin user / email |
 | `ADMIN_PASS` | Admin password |
-| `SLACK_WEBHOOK_URL` | Slack webhook for Mon/Wed runs and manual dispatches |
-| `SLACK_WEBHOOK_URL_2` | Slack webhook for Fri/Sat runs |
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook for run summaries |
 
 Enable GitHub Pages under Settings → Pages (source: "GitHub Actions") so the report URL works.
 

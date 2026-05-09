@@ -5,9 +5,7 @@ on:
   schedule:
     # Monday & Wednesday 04:00 BD → 22:00 UTC Sun & Tue → routes to SLACK_WEBHOOK_URL
     - cron: "0 22 * * 0,2"
-    # Friday 10:00 BD → 04:00 UTC Fri → routes to SLACK_WEBHOOK_URL_2
-    - cron: "0 4 * * 5"
-  # Manual trigger from the Actions tab (always uses SLACK_WEBHOOK_URL)
+  # Manual trigger from the Actions tab (also uses SLACK_WEBHOOK_URL)
   workflow_dispatch:
 
 permissions:
@@ -243,16 +241,8 @@ jobs:
           }
           EOF
 
-      - name: Determine which webhook to use
-        id: webhook-route
-        run: |
-          # Bangladesh time day-of-week (1=Mon, 2=Tue, ..., 7=Sun).
-          # Friday=5 → secondary webhook; everything else → primary.
-          DAY_OF_WEEK=$(TZ='Asia/Dhaka' date +%u)
-          echo "day=$DAY_OF_WEEK" >> $GITHUB_OUTPUT
-
-      - name: Send to Slack Webhook 1 (Mon/Wed runs & all manual dispatches)
-        if: always() && (github.event_name != 'schedule' || steps.webhook-route.outputs.day != '5')
+      - name: Send to Slack
+        if: always()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -260,21 +250,7 @@ jobs:
             curl -X POST "$SLACK_WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
               -d @/tmp/slack-payload.json
-            echo "Slack webhook 1 sent"
+            echo "Slack notification sent"
           else
             echo "SLACK_WEBHOOK_URL not set, skipping"
-          fi
-
-      - name: Send to Slack Webhook 2 (Friday scheduled run only)
-        if: always() && github.event_name == 'schedule' && steps.webhook-route.outputs.day == '5'
-        env:
-          SLACK_WEBHOOK_URL_2: ${{ secrets.SLACK_WEBHOOK_URL_2 }}
-        run: |
-          if [ -n "$SLACK_WEBHOOK_URL_2" ]; then
-            curl -X POST "$SLACK_WEBHOOK_URL_2" \
-              -H 'Content-Type: application/json' \
-              -d @/tmp/slack-payload.json
-            echo "Slack webhook 2 sent"
-          else
-            echo "SLACK_WEBHOOK_URL_2 not set, skipping"
           fi
