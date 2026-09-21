@@ -139,7 +139,8 @@ test.describe('Auto-Link Keywords — frontend replacement', () => {
     // Some Pro builds return { data: [...] }; others return an object keyed by link id.
     const payload = list.data?.data || list.data || [];
     const flat = Array.isArray(payload) ? payload : Object.values(payload).flat();
-    const match = flat.find(k => (k.keyword || '').includes(uniqueKeyword)) || null;
+    const parsed = flat.map(k => { if (typeof k !== 'string') return k; try { return JSON.parse(k); } catch (e) { return null; } }).filter(Boolean);
+    const match = parsed.find(k => `${k.keywords || k.keyword || ''}`.includes(uniqueKeyword)) || null;
     // If the API returns a non-standard shape we at least confirm the endpoint is live.
     if (!match) {
       test.info().annotations.push({ type: 'info', description: 'keyword list shape unexpected; endpoint returned 200' });
