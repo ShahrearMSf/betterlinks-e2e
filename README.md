@@ -109,7 +109,7 @@ BetterLinks-E2E-Test/
 │   ├── cleanup.js            # Safe sweep of test-prefixed data
 │   ├── global-setup.js       # Pre-run sweep
 │   ├── global-teardown.js    # Post-run sweep
-│   ├── selectors.js          # Centralised selector map
+│   ├── selectors.js          # Centralised selector map (3.x `bl-*` / `blb-*`)
 │   └── utils.js              # safeGoto, handleEmailVerification, toasts, slug helpers
 ├── pages/                    # Page objects
 │   ├── ManageLinksPage.js
@@ -117,7 +117,9 @@ BetterLinks-E2E-Test/
 │   ├── AnalyticsPage.js
 │   ├── CategoriesTagsPage.js
 │   ├── KeywordsPage.js
-│   └── LinkScannerPage.js
+│   ├── LinkScannerPage.js
+│   ├── PromoCardsPage.js     # Pro 3.0 — Product Display
+│   └── BioLinksPage.js       # Pro 3.0 — Link in Bio
 ├── tests/
 │   ├── auth.setup.js         # Login & storageState (with transient-failure retry)
 │   ├── free/                 # Free-tier specs
@@ -129,6 +131,22 @@ BetterLinks-E2E-Test/
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
+## Target Version
+
+The suite targets **BetterLinks 3.x (free) + BetterLinks Pro 3.x**.
+
+BetterLinks 3.0 rebuilt the entire admin UI: the old `btl-*` markup was replaced
+by a `bl-*` / `blb-*` BEM system, links moved to a board/list layout, the link
+form became a drawer, Settings swapped react-tabs for a sidebar shell, Analytics
+became one page of seven sections, and Promo Cards, Bio Links, Feature Modules
+and the three-section Link Scanner arrived. Selectors here do **not** match 2.x
+builds. Two REST shapes also changed and are handled in `helpers/api.js`:
+
+| Endpoint | 2.x | 3.x |
+|---|---|---|
+| `GET betterlinks/v1/terms` | `{ data: { category: [], tag: [] } }` | flat `{ data: [ { ID, term_name, term_type } ] }` |
+| `GET betterlinks/v1/settings` | object | JSON **string** in `data` |
+
 ## Test Coverage
 
 ### Free (`tests/free/`)
@@ -138,34 +156,66 @@ BetterLinks-E2E-Test/
 | `link-crud.spec.js` | Create / edit / delete / duplicate / validate / REST-to-UI parity |
 | `link-options.spec.js` | nofollow, sponsored, parameter forwarding, tracking toggles |
 | `redirects.spec.js` | 301 / 302 / 307 / cloaked / parameter-forwarding |
-| `settings.spec.js` | Tabs, persistence, default flag toggles |
-| `categories-tags.spec.js` | Baseline CRUD + Uncategorized protection |
-| `terms-extended.spec.js` | Deeper CRUD, duplicate-name handling, appear-in-dropdown |
-| `analytics.spec.js` | Overview, chart/table, click generation, date range, no-data |
-| `analytics-extended.spec.js` | **Country column**, top-charts (Referer / Social Media / Devices / OS / Browser / Medium), reset, refresh, pagination, bulk actions |
-| `analytics-filter.spec.js` | Filter toolbar, calendar/date range, REST endpoint, table search |
-| `import-export.spec.js` | Export links / analytics / sample CSV + round-trip |
-| `link-views.spec.js` | **List view ↔ grid/DnD toggle**, drag handle attrs, favorite filter, category filter |
-| `favorite.spec.js` | Favorite/unfavorite toggle on link cards |
-| `search-filter.spec.js` | Manage-Links filter controls, Analytics search, Terms search |
-| `short-url-validation.spec.js` | Duplicate slug, empty URL, special chars, long slug |
-| `admin-navigation.spec.js` | Every BetterLinks admin page loads (no 404 / fatal PHP), WP dashboard unaffected, submenu hrefs resolve |
+| `settings.spec.js` | **Sidebar shell**, section deep-links (`?tab=`), `.bl-toggle` defaults + REST persistence |
+| `feature-modules.spec.js` | **New in 3.x** — module grid, per-module config screens, toggle persistence |
+| `categories-tags.spec.js` | Tag/Category tabs, `.bl-term-modal` CRUD, rename, Uncategorized protection |
+| `terms-extended.spec.js` | Deeper CRUD, duplicate handling, search, appear-in-drawer |
+| `analytics.spec.js` | **Seven sections**, range presets, hero chart, click log, single-link navigation |
+| `analytics-extended.spec.js` | Single-link view: identity card, stat strip, geo/sources/tech/timing, click-log columns |
+| `analytics-filter.spec.js` | Range presets, calendar popover, filter menu, reset, search, rows-per-page |
+| `import-export.spec.js` | **Settings → Import & Export** — export links/analytics/sample CSV + import round-trip |
+| `link-views.spec.js` | **Board / List / Compact**, card anatomy, list table headers, overview cards |
+| `favorite.spec.js` | Favorite/unfavorite toggle + favourites filter |
+| `search-filter.spec.js` | Manage-Links search & filters, Analytics search, Terms search |
+| `short-url-validation.spec.js` | Duplicate slug (inline error), empty URL, special chars, long slug |
+| `gutenberg-instant-redirect.spec.js` | **New** — Instant Redirect panel in the post/page editor, end-to-end redirect |
+| `admin-navigation.spec.js` | Every 3.x admin page loads (incl. Promo Cards, Bio Links, MCP), submenu resolves |
 
 ### Pro (`tests/pro/`)
 
 | Spec | What it covers |
 |---|---|
-| `auto-link-keywords.spec.js` | Keywords admin page, list, add, delete, import/export |
-| `autolink-frontend.spec.js` | **End-to-end**: create keyword → publish WP post → verify frontend replacement |
-| `broken-link-checker.spec.js` | Scan start, results, filters, instant check, clear logs |
-| `custom-meta-tags.spec.js` | OG title/desc, Twitter card, image upload, rendered HTML |
-| `dynamic-redirects.spec.js` | Split-test variants, rotation types, geolocation placeholder |
-| `link-expiration.spec.js` | Date-based / click-based / scheduled / expired-fallback |
-| `password-protection.spec.js` | Toggle, set password, wrong password, correct password |
-| `role-management.spec.js` | Permissions matrix, role columns, save, role-specific scenarios |
-| `utm-templates.spec.js` | UTM builder, fields, save template, apply template, REST list |
+| `promo-cards.spec.js` | **New in 3.0** — list/tabs, three-column editor, sections, live preview, save + REST |
+| `bio-links.spec.js` | **New in 3.0** — builder sections, phone preview, slug, draft/publish, frontend page |
+| `license.spec.js` | **New spec** — License panel, status/action coherence, masked key (read-only) |
+| `link-scanner-sections.spec.js` | **New spec** — the three scanner sections and switching between them |
+| `auto-link-keywords.spec.js` | Keywords page, stat cards, chips drawer, add/search/filter, import/export, REST |
+| `autolink-frontend.spec.js` | **End-to-end**: keyword → published post → frontend replacement |
+| `broken-link-checker.spec.js` | Health score, scan start, status filters, clear-logs confirmation |
+| `custom-meta-tags.spec.js` | Customize Link Preview module, OG fields, cloaked page head |
+| `dynamic-redirects.spec.js` | Dynamic Redirect panel + switch, split-test rule over REST, split-test report |
+| `link-expiration.spec.js` | Advanced panel: status, date/click expiry, expiry redirect, expired behaviour |
+| `password-protection.spec.js` | Password Protection module + config, per-link password, front-end password form |
+| `role-management.spec.js` | Capability matrix, role columns, filters, toggle + save persistence |
+| `utm-templates.spec.js` | UTM builder fields, apply-to-target, applied/not-applied state, templates over REST |
 
-<p align="right">(<a href="#readme-top">back to top</a>)</p>
+### Run status (2026-09-20, live site, BetterLinks 3.1.3 / Pro 3.0.3)
+
+Full suite — 274 tests, ~48 minutes, single worker:
+
+| Result | Count |
+|---|---|
+| passed | 266 |
+| failed | 2 (both deliberate — see below) |
+| skipped | 6 |
+
+The full run itself reported 264/4/6; the two extra failures were stale
+expectations in the suite and were fixed and re-verified straight after.
+The two remaining failures are deliberate: they flag the live defects listed
+below rather than being worked around. Skips fire when a feature module is
+switched off (Password Protection, Customize Link Preview) instead of
+asserting nothing.
+
+### Known environment caveats
+
+- **Click analytics do not accumulate on the current test site.** Visiting a
+  tracked short link redirects correctly but records no click, so the suite
+  asserts that analytics *surfaces* render and respond rather than asserting
+  click counts. Worth investigating separately (page cache in front of the
+  redirect is the usual cause).
+- `GET betterlinks/v1/clicks/individual/{id}` currently returns a **500** on
+  Pro 3.0.3 (`Helper::sanitize_date()` called statically). The single-link REST
+  test asserts a 200, so it fails until that is fixed — deliberately.
 
 ## Live-Site Safety
 
@@ -234,6 +284,8 @@ Enable GitHub Pages under Settings → Pages (source: "GitHub Actions") so the r
 - [x] Add admin-navigation sanity sweep
 - [x] Verify auto-link keywords on the rendered frontend
 - [x] Live-site cleanup sweep (pre + post)
+- [x] Ported the suite from the 2.x UI to the 3.x redesign
+- [x] Promo Cards, Bio Links, Feature Modules, License and Instant Redirect coverage
 - [ ] Multi-role testing (editor / author / subscriber access)
 - [ ] CI pipeline (GitHub Actions) with nightly smoke
 - [ ] Cross-browser (Firefox / WebKit)
