@@ -125,32 +125,46 @@ test.describe('Redirect Type Tests', () => {
   test('redirect captures analytics click when tracking enabled', async ({ page, context }) => {
     const slug = uniqueSlug('track');
     createdSlugs.push(slug);
-    const res = await api.createLink({
+    const created = await api.createLink({
       title: `Track Test ${slug}`,
       targetUrl: 'https://example.com/track-target',
       slug,
       trackMe: true,
     });
+    const id = created.data?.data?.ID;
+    expect(id, 'tracked link should be created').toBeTruthy();
 
-    // Visit the link to generate a click
-    const newPage = await context.newPage();
-    await newPage.goto(`${process.env.BASE_URL}/${slug}`, {
-      waitUntil: 'domcontentloaded',
+    // Visit the link a few times from a clean context with an ordinary UA, so
+    // nothing looks like an automated/bot hit to the tracker.
+    const visitor = await context.browser().newContext({
+      ignoreHTTPSErrors: true,
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
     });
-    await newPage.close();
+    for (let i = 0; i < 2; i++) {
+      const visit = await visitor.newPage();
+      await visit.goto(`${process.env.BASE_URL}/${slug}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await visit.waitForTimeout(800);
+      await visit.close();
+    }
+    await visitor.close();
 
-    // Wait a moment for analytics to process
-    await page.waitForTimeout(2000);
-
-    // Check analytics - navigate to analytics page
-    await page.goto('/wp-admin/admin.php?page=betterlinks-analytics');
+    // Give the click pipeline a moment, then read the analytics REST layer.
+    await page.goto('/wp-admin/admin.php?page=betterlinks');
     await waitForAppReady(page);
+    await page.waitForTimeout(5000);
 
-    // The link should appear in analytics with at least 1 click
-    const analyticsRow = page.locator('tr, [class*="row"]').filter({ hasText: `Track Test ${slug}` });
-    const isVisible = await analyticsRow.isVisible({ timeout: 5000 }).catch(() => false);
-    // Analytics might take time to reflect; this verifies the page loads
-    expect(isVisible || true).toBeTruthy(); // Soft check — analytics may be async
+    const from = new Date(Date.now() - 7 * 864e5).toISOString().split('T')[0];
+    const to = new Date().toISOString().split('T')[0];
+    const analytics = await api.getAnalytics(from, to);
+    expect(analytics.status).toBe(200);
+
+    const payload = analytics.data?.data || {};
+    const rows = payload.analytic || [];
+    const recorded = Array.isArray(rows) && rows.some((r) => String(r.link_id) === String(id) || `${r.short_url || ''}` === slug);
+    expect(
+      recorded,
+      `no click was recorded for ${slug} after two visits — check that the redirect is not being served from a page cache and that tracking is enabled`
+    ).toBeTruthy();
   });
 
   test('redirect with parameter forwarding passes query params', async ({ page, context }) => {
