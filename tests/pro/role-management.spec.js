@@ -1,124 +1,94 @@
 const { test, expect } = require('@playwright/test');
 const { SettingsPage } = require('../../pages/SettingsPage');
-const { waitForAppReady, waitForToast } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
+/**
+ * Role Management (Pro) — BetterLinks 3.x.
+ *
+ * Moved from the old react-tabs strip to Settings → System → Role Management
+ * (`?tab=role-management`) and redesigned as `.bl-rm`: one section per
+ * capability ("Who Can View Links?", "Who Can Create Links?", …), each with a
+ * switch per role and an "Enable all" shortcut.
+ */
 test.describe('Role Management (Pro)', () => {
   let settingsPage;
 
   test.beforeEach(async ({ page }) => {
     settingsPage = new SettingsPage(page);
-    await settingsPage.goto();
     await settingsPage.gotoRoleManagement();
+    await expect(settingsPage.roleManagement).toBeVisible({ timeout: 25000 });
   });
 
-  test('should load Role Management tab', async ({ page }) => {
-    const content = await page.locator('#betterlinksbody').textContent();
-    const hasRoleContent = content.toLowerCase().includes('role') ||
-      content.toLowerCase().includes('permission') ||
-      content.toLowerCase().includes('editor') ||
-      content.toLowerCase().includes('who can');
-    expect(hasRoleContent).toBeTruthy();
+  test('panel loads under Settings → System', async () => {
+    await expect(settingsPage.panelTitle).toContainText(/Role Management/i);
+    await expect(settingsPage.navLink('Role Management')).toBeVisible();
   });
 
-  test('should display permission rows for each capability', async ({ page }) => {
-    // Expected permissions: viewlinks, writelinks, editlinks, checkanalytics, etc.
-    const permissions = [
-      'View Links', 'Create Links', 'Edit Links', 'Analytics',
-      'Settings', 'Favorite', 'Auto', 'Tags', 'Link Scanner'
-    ];
-
-    const content = await page.locator('#betterlinksbody').textContent();
-    let matchCount = 0;
-    for (const perm of permissions) {
-      if (content.toLowerCase().includes(perm.toLowerCase())) {
-        matchCount++;
-      }
+  test('shows a section per capability', async ({ page }) => {
+    const text = ((await settingsPage.roleManagement.textContent()) || '').toLowerCase();
+    for (const capability of ['view links', 'create links', 'edit links', 'check analytics', 'edit settings']) {
+      expect(text).toContain(capability);
     }
-    // At least some permission labels should be visible
-    expect(matchCount).toBeGreaterThan(0);
+    expect(await page.locator('.bl-rm__section').count()).toBeGreaterThan(3);
   });
 
-  test('should display role columns (Editor, Author, etc.)', async ({ page }) => {
-    const content = await page.locator('#betterlinksbody').textContent();
-    const roles = ['Editor', 'Author', 'Contributor', 'Subscriber'];
-
-    let roleCount = 0;
-    for (const role of roles) {
-      if (content.includes(role)) {
-        roleCount++;
-      }
-    }
-    expect(roleCount).toBeGreaterThan(0);
+  test('covers the newer 3.x capabilities too', async () => {
+    const text = ((await settingsPage.roleManagement.textContent()) || '').toLowerCase();
+    expect(text).toMatch(/favorite/);
+    expect(text).toMatch(/autolink|auto-link/);
+    expect(text).toMatch(/tags & categories/);
   });
 
-  test('should toggle a permission checkbox', async ({ page }) => {
-    // Role management has permission rows with role checkboxes (Editor, Author, etc.)
-    // Each row has labels with checkboxes inside. Find a visible label.btl-checkbox-field.
-    const checkboxLabels = page.locator('#betterlinksbody label.btl-checkbox-field');
-    const count = await checkboxLabels.count();
-
-    if (count > 0) {
-      // Find first visible checkbox label and click it to toggle
-      for (let i = 0; i < count; i++) {
-        const label = checkboxLabels.nth(i);
-        if (await label.isVisible({ timeout: 500 }).catch(() => false)) {
-          const checkbox = label.locator('input[type="checkbox"]');
-          const before = await checkbox.isChecked();
-          await label.click();
-          await page.waitForTimeout(300);
-          const after = await checkbox.isChecked();
-          expect(after).toBe(!before);
-          // Restore original state
-          await label.click();
-          return;
-        }
-      }
-    }
-    // If no btl-checkbox-field found, the page structure differs — pass softly
-    expect(true).toBeTruthy();
-  });
-
-  test('should save role management settings', async ({ page }) => {
-    const saveBtn = page.locator('button').filter({ hasText: /Save|Update/i }).first();
-    if (await saveBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await saveBtn.click();
-      await page.waitForTimeout(2000);
-      // Should succeed
-      const body = await page.locator('#betterlinksbody').textContent();
-      expect(body).toBeTruthy();
+  test('each section lists the WordPress roles', async ({ page }) => {
+    const names = (await page.locator(S.settings.roleName).allTextContents()).map((n) => n.trim());
+    for (const role of ['Editor', 'Author', 'Contributor', 'Subscriber']) {
+      expect(names).toContain(role);
     }
   });
 
-  test('editor should have limited access based on permissions', async ({ page }) => {
-    // COMMENT: This test requires logging in as an Editor role user.
-    // Steps for live site:
-    // 1. Set Editor permissions: viewlinks=yes, writelinks=no, editlinks=no
-    // 2. Save settings
-    // 3. Log in as Editor
-    // 4. Navigate to BetterLinks
-    // 5. Verify: can see links but cannot create/edit
-    // 6. "Create New Link" button should be hidden or disabled
-    expect(true).toBeTruthy();
+  test('role switches are real checkboxes', async ({ page }) => {
+    const switches = page.locator(S.settings.roleSwitchInput);
+    expect(await switches.count()).toBeGreaterThan(0);
+    await expect(switches.first()).toHaveAttribute('type', 'checkbox');
   });
 
-  test('author with no permissions should not see BetterLinks menu', async ({ page }) => {
-    // COMMENT: This test requires logging in as an Author role user with all permissions disabled.
-    // Steps for live site:
-    // 1. Disable all permissions for Author role
-    // 2. Save settings
-    // 3. Log in as Author
-    // 4. Verify: BetterLinks menu is not visible in wp-admin sidebar
-    expect(true).toBeTruthy();
+  test('each section shows an enabled-role count and "Enable all"', async ({ page }) => {
+    const section = page.locator('.bl-rm__section').first();
+    await expect(section.locator('.bl-rm__count')).toContainText(/of \d+ roles/i);
+    await expect(section.locator('.bl-rm__all')).toBeVisible();
   });
 
-  test('subscriber should never have access by default', async ({ page }) => {
-    // COMMENT: Subscribers should never see BetterLinks menu by default.
-    // Steps for live site:
-    // 1. Log in as Subscriber
-    // 2. Navigate to wp-admin
-    // 3. Verify: BetterLinks menu is not present
-    // 4. Direct URL access to admin.php?page=betterlinks should deny access
-    expect(true).toBeTruthy();
+  test('a role filter narrows the matrix', async ({ page }) => {
+    const filter = page.locator(S.settings.roleManagement).locator('.bl-rm__filter-btn').first();
+    await expect(filter).toBeVisible();
+    await filter.click();
+    await page.waitForTimeout(800);
+    await expect(page.locator('.bl-rm__filter-menu')).toBeVisible({ timeout: 8000 });
+    await page.keyboard.press('Escape');
+  });
+
+  test('toggling a permission and saving persists it', async ({ page }) => {
+    const first = page.locator(S.settings.roleSwitchInput).first();
+    const before = await first.isChecked();
+
+    await first.click({ force: true });
+    await page.waitForTimeout(400);
+    await page.locator('.bl-rm__footer button').first().click();
+    await page.waitForTimeout(3000);
+
+    await settingsPage.gotoRoleManagement();
+    const after = await page.locator(S.settings.roleSwitchInput).first().isChecked();
+    expect(after).toBe(!before);
+
+    // Restore the original permission matrix.
+    await page.locator(S.settings.roleSwitchInput).first().click({ force: true });
+    await page.waitForTimeout(400);
+    await page.locator('.bl-rm__footer button').first().click();
+    await page.waitForTimeout(2500);
+  });
+
+  test('save button is present at the foot of the matrix', async ({ page }) => {
+    await expect(page.locator('.bl-rm__footer button')).toBeVisible();
   });
 });

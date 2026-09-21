@@ -1,25 +1,27 @@
 const { test, expect } = require('@playwright/test');
 const { AnalyticsPage } = require('../../pages/AnalyticsPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { uniqueSlug, waitForAppReady } = require('../../helpers/utils');
+const { uniqueSlug, waitForAppReady, today, daysAgo } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
 /**
- * Extended analytics coverage — country, device, browser, OS, referrer, medium
- * widgets + the click-details table. These are driven against the SINGLE-LINK
- * analytics page at ?page=betterlinks-analytics&id=N.
+ * Single-link analytics (BetterLinks 3.x): `?page=betterlinks-analytics&id=N`.
+ *
+ * The view is `.bl-an--single` — an identity card (`.bl-slc`), a stat strip
+ * (`.bl-sov`), the Geography / Sources / Technology / Timing sections and the
+ * click log (`.bl-clog`) whose columns include Country, Browser, OS, Device,
+ * Referrer, User agent and Parameters.
  */
-test.describe('Analytics — Extended (Country / Device / Browser / OS)', () => {
+test.describe('Analytics — single link view', () => {
   let analyticsPage;
-  let api;
   let seededLinkId = null;
   let seededSlug = null;
 
   test.beforeAll(async ({ browser }) => {
-    // Seed one tracked link and hit it a few times so single-link analytics has data.
     const ctx = await browser.newContext({ storageState: 'playwright/.auth/admin.json', ignoreHTTPSErrors: true });
     const page = await ctx.newPage();
-    await page.goto('/wp-admin/admin.php?page=betterlinks', { waitUntil: 'domcontentloaded' });
+    await page.goto(`${process.env.BASE_URL}/wp-admin/admin.php?page=betterlinks`, { waitUntil: 'domcontentloaded' });
     await waitForAppReady(page);
     const seedApi = new BetterLinksAPI(page);
     seededSlug = uniqueSlug('country');
@@ -29,152 +31,147 @@ test.describe('Analytics — Extended (Country / Device / Browser / OS)', () => 
       slug: seededSlug,
       trackMe: true,
     });
-    seededLinkId = res.data?.data?.ID || res.data?.ID || null;
+    seededLinkId = res.data?.data?.ID || null;
 
+    // Generate a few hits so the view has something to aggregate.
     if (seededLinkId) {
+      const visitorCtx = await browser.newContext({
+        ignoreHTTPSErrors: true,
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+      });
       for (let i = 0; i < 3; i++) {
-        const visit = await ctx.newPage();
+        const visit = await visitorCtx.newPage();
         await visit.goto(`${process.env.BASE_URL}/${seededSlug}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
         await visit.close();
       }
+      await visitorCtx.close();
     }
+    await ctx.close();
+  });
+
+  test.afterAll(async ({ browser }) => {
+    if (!seededLinkId) return;
+    const ctx = await browser.newContext({ storageState: 'playwright/.auth/admin.json', ignoreHTTPSErrors: true });
+    const page = await ctx.newPage();
+    await page.goto(`${process.env.BASE_URL}/wp-admin/admin.php?page=betterlinks`, { waitUntil: 'domcontentloaded' });
+    await waitForAppReady(page);
+    await new BetterLinksAPI(page).deleteLink(seededLinkId);
     await ctx.close();
   });
 
   test.beforeEach(async ({ page }) => {
     analyticsPage = new AnalyticsPage(page);
-    api = new BetterLinksAPI(page);
-  });
-
-  test('single-link analytics page renders header', async ({ page }) => {
     test.skip(!seededLinkId, 'seed link not created');
     await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const header = page.locator('.btl-single-click-info-header');
-    await expect(header).toBeVisible({ timeout: 15000 });
-    await expect(header).toContainText(seededSlug);
   });
 
-  test('analytics chart container is present on single-link page', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const chart = page.locator('.btl-analytics-chart').first();
-    await expect(chart).toBeVisible({ timeout: 10000 });
+  test('single-link view renders the link identity card', async ({ page }) => {
+    await expect(page.locator('.bl-an--single')).toBeVisible({ timeout: 20000 });
+    const card = analyticsPage.singleCard;
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(seededSlug);
+    await expect(card).toContainText('https://example.com/country-seed');
   });
 
-  test('top-charts widgets section is rendered', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const top1 = page.locator('.btl-top-charts-1');
-    const top2 = page.locator('.btl-top-charts-2');
-    await expect(top1.or(top2).first()).toBeVisible({ timeout: 10000 });
+  test('header offers Back, range presets, Reset, Refresh Stats and Export', async ({ page }) => {
+    await expect(page.locator(S.analytics.backButton)).toBeVisible();
+    await expect(analyticsPage.rangeButton('30 days')).toBeVisible();
+    await expect(analyticsPage.resetButton).toBeVisible();
+    await expect(analyticsPage.refreshButton).toBeVisible();
+    await expect(analyticsPage.exportButton).toBeVisible();
   });
 
-  test('top-charts shows Referer / Social Media / Devices / OS / Browser / Medium labels', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    // Wait for the top-charts container specifically, then give charts time to paint
-    await expect(page.locator('.btl-top-charts-1, .btl-top-charts-2').first()).toBeVisible({ timeout: 15000 });
-    await page.waitForTimeout(3000);
-    const body = await page.locator('#betterlinksbody').textContent();
-    const expected = ['Referer', 'Social Media', 'Devices', 'OS', 'Browser', 'Medium'];
-    const found = expected.filter(e => body.includes(e));
-    // At least 3 of the 6 widgets should be rendered. The visibility of individual
-    // widgets can vary with zero-click data, so we don't insist on all of them.
-    expect(found.length).toBeGreaterThanOrEqual(3);
+  test('stat strip shows total / unique clicks and top country / device', async ({ page }) => {
+    const stats = page.locator('.bl-sov__stats');
+    await expect(stats).toBeVisible({ timeout: 20000 });
+    const text = ((await stats.textContent()) || '').toUpperCase();
+    expect(text).toContain('TOTAL CLICKS');
+    expect(text).toContain('UNIQUE CLICKS');
+    expect(text.includes('TOP COUNTRY') || text.includes('TOP DEVICE')).toBeTruthy();
   });
 
-  test('click-details table includes Country column', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    await page.waitForTimeout(2000);
-    const headers = page.locator('.btl-tbl-th-label');
-    const count = await headers.count();
-    const labels = [];
-    for (let i = 0; i < count; i++) labels.push((await headers.nth(i).textContent() || '').trim());
-    expect(labels.join('|').toLowerCase()).toContain('country');
+  test('clicks-over-time chart is rendered', async ({ page }) => {
+    await expect(page.locator('.bl-sov__chart')).toBeVisible({ timeout: 20000 });
+    await expect(analyticsPage.chart).toBeVisible({ timeout: 20000 });
   });
 
-  test('click-details table includes Browser, OS, Device, Referrer columns', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    await page.waitForTimeout(2000);
-    const headers = page.locator('.btl-tbl-th-label');
-    const count = await headers.count();
-    const labels = [];
-    for (let i = 0; i < count; i++) labels.push((await headers.nth(i).textContent() || '').trim().toLowerCase());
-    for (const expected of ['browser', 'os', 'device', 'referrer']) {
-      expect(labels.join('|')).toContain(expected);
+  test('Geography / Sources / Technology / Timing sections are present', async () => {
+    const titles = (await analyticsPage.sectionTitles()).map((t) => t.toUpperCase());
+    for (const expected of ['GEOGRAPHY', 'TRAFFIC SOURCES', 'TECHNOLOGY', 'TIMING', 'CLICK LOG']) {
+      expect(titles.some((t) => t.includes(expected))).toBeTruthy();
     }
   });
 
-  test('refresh stats button exists on analytics', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const refresh = page.locator('.btl-refresh-btn').first();
-    await expect(refresh).toBeVisible({ timeout: 10000 });
+  test('breakdown widgets render data or an explicit no-data state', async ({ page }) => {
+    // Referrers / social / channels / devices / OS / browser are `.bl-bars`.
+    const bars = page.locator(S.analytics.bars);
+    expect(await bars.count()).toBeGreaterThanOrEqual(3);
+    const first = bars.first();
+    await expect(first).toBeVisible();
+    const hasState = await first.locator('.bl-bars__state').isVisible().catch(() => false);
+    const hasRows = await first.locator('.bl-bars__row, .bl-bars__item').count();
+    expect(hasState || hasRows > 0).toBeTruthy();
   });
 
-  test('refresh stats button triggers refetch without error', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const refresh = page.locator('.btl-refresh-btn').first();
-    await refresh.click({ force: true });
-    await page.waitForTimeout(1500);
-    await expect(page.locator('#betterlinksbody')).toBeVisible();
+  test('world map and timing heatmap render', async ({ page }) => {
+    await expect(page.locator(S.analytics.geography)).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(S.analytics.heatmap)).toBeVisible({ timeout: 20000 });
   });
 
-  test('reset-analytics button exists on single-link page', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const reset = page.locator('.btl-reset-analytics-initial-button');
-    await expect(reset).toBeVisible({ timeout: 10000 });
+  test('click log includes Country, Browser, OS, Device and Referrer columns', async () => {
+    const headers = (await analyticsPage.columnHeaders()).map((h) => h.toLowerCase());
+    for (const expected of ['country', 'browser', 'os', 'device', 'referrer']) {
+      expect(headers.join('|')).toContain(expected);
+    }
   });
 
-  test('date-range filter control is present', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const filter = page.locator('.btl-analytics-filter, .btl-list-view-calendar').first();
-    await expect(filter).toBeVisible({ timeout: 10000 });
+  test('click log exposes user agent and parameters columns', async () => {
+    const headers = (await analyticsPage.columnHeaders()).map((h) => h.toLowerCase()).join('|');
+    expect(headers).toContain('user agent');
+    expect(headers).toContain('parameters');
   });
 
-  test('pagination controls are present', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const pag = page.locator('.btl-tbl-pagination').first();
-    await expect(pag).toBeVisible({ timeout: 10000 });
+  test('bulk actions and column picker are available on the click log', async ({ page }) => {
+    await expect(analyticsPage.bulkSelect).toBeVisible();
+    await expect(analyticsPage.columnsButton).toBeVisible();
+    await analyticsPage.columnsButton.click();
+    await expect(page.locator(S.analytics.columnsMenu)).toBeVisible({ timeout: 8000 });
+    await page.keyboard.press('Escape');
   });
 
-  test('click data populates over REST within reasonable time', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    // The analytics pipeline is async; just ensure no errors on fetch.
-    const today = new Date().toISOString().split('T')[0];
-    const yearAgo = new Date(); yearAgo.setFullYear(yearAgo.getFullYear() - 1);
-    const from = yearAgo.toISOString().split('T')[0];
-    await page.goto('/wp-admin/admin.php?page=betterlinks', { waitUntil: 'domcontentloaded' });
+  test('rows-per-page and pager controls are present', async () => {
+    await expect(analyticsPage.rowsPerPage).toBeVisible();
+    await expect(analyticsPage.pager).toBeVisible();
+  });
+
+  test('Refresh Stats re-runs without error', async ({ page }) => {
+    await analyticsPage.refreshButton.click();
+    await page.waitForTimeout(3000);
+    await expect(page.locator(S.app.root)).toBeVisible();
+    await expect(page.locator('.bl-an--single')).toBeVisible();
+  });
+
+  test('range presets re-query the single-link view', async ({ page }) => {
+    await analyticsPage.rangeButton('7 days').click();
+    await page.waitForTimeout(2500);
+    await expect(analyticsPage.rangeButton('7 days')).toHaveClass(/is-active/);
+    await expect(page.locator('.bl-an--single')).toBeVisible();
+  });
+
+  test('single-link analytics REST endpoint responds', async ({ page }) => {
+    await page.goto('/wp-admin/admin.php?page=betterlinks');
     await waitForAppReady(page);
-    const res = await api.getAnalytics(from, today);
-    expect(res.status).toBe(200);
+    const api = new BetterLinksAPI(page);
+    const res = await api.getIndividualAnalytics(seededLinkId, daysAgo(30), today());
+    // A 500 here means the Pro endpoint fataled — see Helper::sanitize_date().
+    expect(res.status, 'clicks/individual/{id} should not return a server error').toBe(200);
   });
 
-  test('top-charts render either data or no-data placeholders (not crash)', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    await page.waitForTimeout(1500);
-    // Either real charts or the explicit no-data fallbacks
-    const anyChartish = page.locator('.apexcharts-canvas, .btl-donut-no-data, .btl-bar-no-data').first();
-    await expect(anyChartish).toBeVisible({ timeout: 10000 });
-  });
-
-  test('bulk-actions select is present on click-details table', async ({ page }) => {
-    test.skip(!seededLinkId, 'seed link not created');
-    await analyticsPage.gotoLinkAnalytics(seededLinkId);
-    const bulk = page.locator('.btl-bulk-actions').first();
-    await expect(bulk).toBeVisible({ timeout: 10000 });
-  });
-
-  test('overview analytics page shows top-charts section', async ({ page }) => {
-    await analyticsPage.goto();
-    const top = page.locator('.btl-top-charts, .btl-analytic-table-wrapper').first();
-    await expect(top).toBeVisible({ timeout: 10000 });
+  test('country / medium REST endpoints respond', async ({ page }) => {
+    await page.goto('/wp-admin/admin.php?page=betterlinks');
+    await waitForAppReady(page);
+    const api = new BetterLinksAPI(page);
+    expect((await api.getCountries(daysAgo(30), today())).status).toBe(200);
+    expect((await api.getMedium(daysAgo(30), today())).status).toBe(200);
   });
 });

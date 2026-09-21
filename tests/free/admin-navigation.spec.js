@@ -7,12 +7,17 @@ require('dotenv').config();
  * "fatal" PHP / JS errors appear. Console errors are collected and asserted
  * against a tolerance (WP admin often emits unrelated deprecation warnings).
  */
+// Menu as of BetterLinks 3.x — Promo Cards, Bio Links, Custom Domain and MCP
+// joined the menu in 3.0; Custom Domain only appears when its module is on.
 const PAGES = [
   { slug: 'betterlinks', name: 'Manage Links' },
   { slug: 'betterlinks-keywords-linking', name: 'Auto-Link Keywords' },
   { slug: 'betterlinks-manage-tags-and-categories', name: 'Tags & Categories' },
+  { slug: 'betterlinks-promo-cards', name: 'Promo Cards' },
+  { slug: 'betterlinks-bio-links', name: 'Bio Links' },
   { slug: 'betterlinks-analytics', name: 'Analytics' },
   { slug: 'betterlinks-link-scanner', name: 'Link Scanner' },
+  { slug: 'betterlinks-mcp', name: 'MCP' },
   { slug: 'betterlinks-settings', name: 'Settings' },
 ];
 
@@ -57,6 +62,16 @@ test.describe('Admin navigation sanity', () => {
     await page.goto('/wp-admin/index.php', { waitUntil: 'domcontentloaded' });
     const menu = page.locator('#toplevel_page_betterlinks');
     await expect(menu).toBeVisible({ timeout: 10000 });
+  });
+
+  test('submenu exposes the 3.x pages', async ({ page }) => {
+    await page.goto('/wp-admin/index.php', { waitUntil: 'domcontentloaded' });
+    const labels = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#toplevel_page_betterlinks .wp-submenu a')).map((a) => (a.textContent || '').trim())
+    );
+    for (const expected of ['Manage Links', 'Tags & Categories', 'Analytics', 'Link Scanner', 'Settings', 'Promo Cards', 'Bio Links']) {
+      expect(labels.some((l) => l.includes(expected)), `submenu should list ${expected}`).toBeTruthy();
+    }
   });
 
   test('each BetterLinks submenu link resolves or returns a WP admin page', async ({ page }) => {

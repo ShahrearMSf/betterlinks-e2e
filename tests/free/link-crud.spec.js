@@ -117,13 +117,13 @@ test.describe('Link CRUD Operations', () => {
     // Duplicate opens modal with copy — verify title is pre-filled
     const value = await linksPage.titleInput.inputValue();
     expect(value).toContain(title);
-    await linksPage.closeModalButton.click();
+    await linksPage.closeDrawer();
   });
 
   test('should close modal without saving', async ({ page }) => {
     await linksPage.clickCreateNew();
     await expect(linksPage.modal).toBeVisible();
-    await linksPage.closeModalButton.click();
+    await linksPage.closeDrawer();
     await page.waitForTimeout(500);
     await expect(linksPage.modal).not.toBeVisible();
   });

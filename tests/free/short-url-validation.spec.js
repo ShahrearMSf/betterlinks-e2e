@@ -24,13 +24,31 @@ test.describe('Short URL validation', () => {
     await linksPage.clickCreateNew();
     await linksPage.fillLinkForm({ title: `Dup Attempt ${slug}`, targetUrl: 'https://example.com/dup', slug });
     await linksPage.submitButton.click();
-    // Either an error toast fires or the modal stays open — both are acceptable.
+    // 3.x flags a taken slug inline (`.errorlog` under the field) before the
+    // request is sent; older builds only fired a toast. Accept either, plus the
+    // drawer simply staying open.
+    const inlineErr = await linksPage.slugError.isVisible({ timeout: 4000 }).catch(() => false);
     const toastErr = await page.locator('.btl-toast-error').first().isVisible({ timeout: 4000 }).catch(() => false);
     const modalStillOpen = await linksPage.modal.isVisible({ timeout: 2000 }).catch(() => false);
-    expect(toastErr || modalStillOpen).toBeTruthy();
+    expect(inlineErr || toastErr || modalStillOpen).toBeTruthy();
     if (modalStillOpen) {
       await linksPage.closeModalButton.click({ force: true }).catch(() => null);
     }
+  });
+
+  test('submitting an existing slug shows the inline "already exists" error', async ({ page }) => {
+    const slug = uniqueSlug('dup');
+    await api.createLink({ title: `Inline Dup ${slug}`, slug });
+
+    await linksPage.clickCreateNew();
+    await linksPage.fillLinkForm({ title: `Inline Dup Attempt ${slug}`, targetUrl: 'https://example.com/dup', slug });
+    // The uniqueness check runs on submit (`shortURLUniqueCheck` in the form's
+    // onSubmit), not while typing — so the error only appears after Publish.
+    await linksPage.submitButton.click();
+    await expect(linksPage.slugError).toBeVisible({ timeout: 10000 });
+    await expect(linksPage.slugError).toContainText(/exists|already/i);
+    await expect(linksPage.modal).toBeVisible();
+    await linksPage.closeModalButton.click({ force: true }).catch(() => null);
   });
 
   test('empty target URL is rejected by the form', async ({ page }) => {

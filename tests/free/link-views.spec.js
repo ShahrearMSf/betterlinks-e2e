@@ -1,134 +1,134 @@
 const { test, expect } = require('@playwright/test');
 const { ManageLinksPage } = require('../../pages/ManageLinksPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { uniqueSlug } = require('../../helpers/utils');
+const { uniqueSlug, waitForAppReady } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
 /**
- * BetterLinks "Manage Links" supports two display modes:
- *   - Grid / drag-and-drop view (default): .btl-dnd-link cards
- *   - List view: .btl-list-view-table (same data in a table)
+ * Manage Links views — BetterLinks 3.x.
  *
- * A toggle button in the toolbar switches between them. This spec verifies
- * that the toggle works and that links seeded via API are visible in both
- * modes. Drag-and-drop reordering isn't asserted end-to-end (the order is
- * persisted to the backend and that's beyond the scope of a sanity test),
- * but the draggable handle is asserted to be present.
+ * 2.x had a grid/DnD toggle; 3.x ships a segmented control with Board, List and
+ * a Compact density modifier. Board cards are `.blb-card` inside `.blb-col`
+ * columns; the list view is a real `<table class="bl-list__table">`.
  */
-test.describe('Manage Links — List view & DnD view', () => {
+test.describe('Manage Links — Board / List / Compact views', () => {
   let linksPage;
-  let api;
-  const seededSlugs = [];
+  let seededId = null;
+  let seededSlug = null;
+  let seededTitle = null;
 
   test.beforeAll(async ({ browser }) => {
     const ctx = await browser.newContext({ storageState: 'playwright/.auth/admin.json', ignoreHTTPSErrors: true });
     const page = await ctx.newPage();
-    await page.goto('/wp-admin/admin.php?page=betterlinks', { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#betterlinksbody', { state: 'attached', timeout: 30000 });
-    const seedApi = new BetterLinksAPI(page);
-    // Seed two links so there's something to flip between views
-    for (let i = 0; i < 2; i++) {
-      const slug = uniqueSlug(`view`);
-      seededSlugs.push(slug);
-      await seedApi.createLink({ title: `View Seed ${slug}`, slug, targetUrl: 'https://example.com/v' });
-    }
+    await page.goto(`${process.env.BASE_URL}/wp-admin/admin.php?page=betterlinks`, { waitUntil: 'domcontentloaded' });
+    await waitForAppReady(page);
+    seededSlug = uniqueSlug('view');
+    seededTitle = `View Seed ${seededSlug}`;
+    const res = await new BetterLinksAPI(page).createLink({ title: seededTitle, slug: seededSlug });
+    seededId = res.data?.data?.ID || null;
+    await ctx.close();
+  });
+
+  test.afterAll(async ({ browser }) => {
+    if (!seededId) return;
+    const ctx = await browser.newContext({ storageState: 'playwright/.auth/admin.json', ignoreHTTPSErrors: true });
+    const page = await ctx.newPage();
+    await page.goto(`${process.env.BASE_URL}/wp-admin/admin.php?page=betterlinks`, { waitUntil: 'domcontentloaded' });
+    await waitForAppReady(page);
+    await new BetterLinksAPI(page).deleteLink(seededId);
     await ctx.close();
   });
 
   test.beforeEach(async ({ page }) => {
     linksPage = new ManageLinksPage(page);
     await linksPage.goto();
-    api = new BetterLinksAPI(page);
+    await linksPage.searchLink(seededSlug);
   });
 
-  test('default (DnD/grid) view renders seeded link cards', async ({ page }) => {
-    await expect(page.locator('.btl-dnd-link').first()).toBeVisible({ timeout: 15000 });
-    for (const slug of seededSlugs) {
-      await expect(page.locator('.btl-dnd-link').filter({ hasText: slug }).first()).toBeVisible({ timeout: 10000 });
+  test('view segment offers Board, List and Compact', async () => {
+    await expect(linksPage.viewButton('Board')).toBeVisible();
+    await expect(linksPage.viewButton('List')).toBeVisible();
+    await expect(linksPage.viewButton('Compact')).toBeVisible();
+  });
+
+  test('board view renders the seeded link as a card', async ({ page }) => {
+    await linksPage.switchToBoard();
+    await linksPage.searchLink(seededSlug);
+    await expect(page.locator(S.manageLinks.board)).toBeVisible();
+    await expect(linksPage.card(seededTitle)).toBeVisible({ timeout: 15000 });
+  });
+
+  test('board cards expose a drag handle and slug', async ({ page }) => {
+    await linksPage.switchToBoard();
+    await linksPage.searchLink(seededSlug);
+    const card = linksPage.card(seededTitle);
+    await expect(card.locator(S.manageLinks.cardGrip)).toBeVisible();
+    await expect(card.locator(S.manageLinks.cardSlug)).toContainText(seededSlug);
+  });
+
+  test('board columns are category columns with counts', async ({ page }) => {
+    await linksPage.switchToBoard();
+    const columns = page.locator(S.manageLinks.boardColumn);
+    expect(await columns.count()).toBeGreaterThan(0);
+    await expect(page.locator(S.manageLinks.boardColumnTitle).first()).toBeVisible();
+  });
+
+  test('toggling to List renders a table layout', async ({ page }) => {
+    await linksPage.switchToList();
+    await expect(page.locator(S.manageLinks.listTable)).toBeVisible({ timeout: 15000 });
+    const headers = (await page.locator(`${S.manageLinks.listTable} thead th`).allTextContents())
+      .map((h) => h.trim().toLowerCase());
+    for (const expected of ['title', 'short url', 'target', 'type', 'clicks']) {
+      expect(headers.join('|')).toContain(expected);
     }
   });
 
-  test('DnD view cards expose react-beautiful-dnd handle attributes', async ({ page }) => {
-    const card = page.locator('.btl-dnd-link').first();
-    await expect(card).toBeVisible({ timeout: 10000 });
-    // BetterLinks uses react-beautiful-dnd; each card has these data attributes
-    // directly on the root node, regardless of hover state.
-    const draggableId = await card.getAttribute('data-rbd-draggable-id');
-    const handleCtx = await card.getAttribute('data-rbd-drag-handle-context-id');
-    expect(draggableId).toBeTruthy();
-    expect(handleCtx).toBeTruthy();
+  test('list view shows the seeded link as a row', async () => {
+    await linksPage.switchToList();
+    await linksPage.searchLink(seededSlug);
+    await expect(linksPage.listRow(seededTitle)).toBeVisible({ timeout: 15000 });
   });
 
-  test('DnD view shows a visible move icon on the card', async ({ page }) => {
-    const card = page.locator('.btl-dnd-link').first();
-    await expect(card).toBeVisible({ timeout: 10000 });
-    const moveIcon = card.locator('.dnd-link-title img[alt="icon"]').first();
-    await expect(moveIcon).toBeVisible({ timeout: 5000 });
+  test('switching back to Board restores the card layout', async ({ page }) => {
+    await linksPage.switchToList();
+    await linksPage.switchToBoard();
+    await expect(page.locator(S.manageLinks.board)).toBeVisible();
+    expect(await linksPage.isBoardView()).toBeTruthy();
   });
 
-  // Helper: switch to list view then bump rows-per-page so every seeded slug
-  // sits on a single visible page (the default is 10 and other specs pile on).
-  async function openListViewAtMaxPageSize(page) {
-    const listBtn = page.locator('button[title="List View"]');
-    await expect(listBtn).toBeVisible({ timeout: 10000 });
-    await listBtn.click({ force: true });
-    await page.waitForTimeout(1000);
-    const pageSize = page.locator('.btl-tbl-pagination select, select').filter({ hasText: /10|30|50|100|200|500/ }).first();
-    if (await pageSize.isVisible({ timeout: 3000 }).catch(() => false)) {
-      const opts = await pageSize.locator('option').allTextContents();
-      const target = ['500', '200', '100', '50'].find(v => opts.includes(v));
-      if (target) {
-        await pageSize.selectOption(target);
-        await page.waitForTimeout(800);
-      }
-    }
-  }
-
-  test('toggle to list view renders list/table layout', async ({ page }) => {
-    await openListViewAtMaxPageSize(page);
-    const listBtn = page.locator('button[title="List View"]');
-    expect(await listBtn.getAttribute('class')).toContain('active');
-    const body = await page.locator('#betterlinksbody').textContent();
-    const hasAny = seededSlugs.some(s => body.includes(s));
-    expect(hasAny).toBeTruthy();
-  });
-
-  test('list view shows seeded link rows (switchback safe)', async ({ page }) => {
-    await openListViewAtMaxPageSize(page);
-    for (const slug of seededSlugs) {
-      await expect(page.locator('#betterlinksbody')).toContainText(slug, { timeout: 10000 });
-    }
-  });
-
-  test('toggle back to Grid view restores card layout', async ({ page }) => {
-    await page.locator('button[title="List View"]').click({ force: true });
-    await page.waitForTimeout(800);
-    const gridBtn = page.locator('button[title="Grid View"]');
-    await gridBtn.click({ force: true });
-    await page.waitForTimeout(800);
-    const cls = await gridBtn.getAttribute('class');
-    expect(cls).toContain('active');
-    await expect(page.locator('.btl-dnd-link').first()).toBeVisible({ timeout: 10000 });
-  });
-
-  test('Favorite filter toggle button renders and toggles', async ({ page }) => {
-    const favBtn = page.locator('button[title="Favorite Links"]');
-    await expect(favBtn).toBeVisible({ timeout: 10000 });
-    const before = await favBtn.getAttribute('class');
-    await favBtn.click({ force: true });
+  test('Compact toggles the board density', async ({ page }) => {
+    await linksPage.switchToBoard();
+    const compact = linksPage.viewButton('Compact');
+    const before = await linksPage.root.evaluate((el) => el.className.includes('is-compact'));
+    await compact.click();
     await page.waitForTimeout(700);
-    const after = await favBtn.getAttribute('class');
-    expect(after).not.toBe(before);
-    await favBtn.click({ force: true });
-    await page.waitForTimeout(500);
+    const after = await linksPage.root.evaluate((el) => el.className.includes('is-compact'));
+    expect(after).toBe(!before);
+    // Restore the previous density so the next test starts clean.
+    await compact.click();
   });
 
-  test('category filter in toolbar is rendered', async ({ page }) => {
-    // Category filter is a react-select near the search input
-    const sel = page.locator('[class*="react-select"]').first();
-    const visible = await sel.isVisible({ timeout: 5000 }).catch(() => false);
-    // Either render or not, but page must still be stable
-    await expect(page.locator('#betterlinksbody')).toBeVisible();
-    expect(typeof visible).toBe('boolean');
+  test('overview cards summarise links, categories, clicks and favorites', async ({ page }) => {
+    const text = ((await page.locator(S.manageLinks.overview).textContent()) || '').toUpperCase();
+    for (const label of ['LINKS', 'CATEGORIES', 'CLICKS', 'FAVORITES']) {
+      expect(text).toContain(label);
+    }
+  });
+
+  test('favorite filter toggle switches state', async ({ page }) => {
+    const fav = linksPage.favoriteFilter;
+    await expect(fav).toBeVisible();
+    await fav.click();
+    await page.waitForTimeout(1200);
+    await expect(fav).toHaveClass(/is-active/);
+    await fav.click();
+    await page.waitForTimeout(800);
+  });
+
+  test('toolbar exposes category, tag, sort and date filters', async ({ page }) => {
+    const filters = page.locator(S.manageLinks.filter);
+    expect(await filters.count()).toBeGreaterThanOrEqual(4);
+    await expect(linksPage.resetFiltersButton).toBeVisible();
   });
 });

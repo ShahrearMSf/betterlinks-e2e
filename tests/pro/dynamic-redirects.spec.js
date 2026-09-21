@@ -1,12 +1,22 @@
 const { test, expect } = require('@playwright/test');
 const { ManageLinksPage } = require('../../pages/ManageLinksPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { uniqueSlug, waitForAppReady, waitForToast } = require('../../helpers/utils');
+const { uniqueSlug, expandDrawerPanel } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
+/**
+ * Dynamic Redirects / split testing (Pro) — BetterLinks 3.x.
+ *
+ * The drawer's "Dynamic Redirects" panel (`.bl-dr`) carries an enable switch;
+ * turning it on reveals the rotation / split-test configuration. The rule is
+ * stored on the link as `dynamic_redirect`, and the split-test report lives at
+ * `betterlinks/v1/clicks/splittest/{id}`.
+ */
 test.describe('Dynamic Redirects / Split Testing (Pro)', () => {
   let linksPage;
   let api;
+  const createdIds = [];
 
   test.beforeEach(async ({ page }) => {
     linksPage = new ManageLinksPage(page);
@@ -14,111 +24,117 @@ test.describe('Dynamic Redirects / Split Testing (Pro)', () => {
     api = new BetterLinksAPI(page);
   });
 
-  test('should show Dynamic Redirect section in link form', async ({ page }) => {
-    await linksPage.clickCreateNew();
-
-    // Look for "Dynamic Redirects" panel on the right side
-    const panels = linksPage.modal.locator('.link-options__head');
-    const count = await panels.count();
-    let found = false;
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text.toLowerCase().includes('dynamic') || text.toLowerCase().includes('redirect')) {
-        found = true;
-        break;
-      }
+  test.afterEach(async () => {
+    while (createdIds.length) {
+      const id = createdIds.pop();
+      await api.deleteLink(id).catch(() => {});
     }
-    expect(found).toBeTruthy();
   });
 
-  test('should display split test / rotation type options', async ({ page }) => {
+  test('link drawer has a Dynamic Redirects panel', async ({ page }) => {
     await linksPage.clickCreateNew();
-
-    // Expand Dynamic Redirects panel
-    const panels = linksPage.modal.locator('.link-options__head');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text.toLowerCase().includes('dynamic')) {
-        await panels.nth(i).click();
-        await page.waitForTimeout(300);
-        break;
-      }
-    }
-
-    // Should have redirect type options
-    const content = await linksPage.modal.textContent();
-    const hasOptions = content.toLowerCase().includes('rotation') ||
-      content.toLowerCase().includes('redirect') ||
-      content.toLowerCase().includes('target');
-    expect(hasOptions).toBeTruthy();
+    const panel = page.locator(S.linkForm.dynamicRedirectPanel);
+    await expect(panel).toBeVisible();
+    await expect(panel.locator(S.linkForm.panelTitle)).toContainText(/Dynamic Redirects/i);
   });
 
-  test('should add split test variants with weighted distribution', async ({ page }) => {
+  test('panel exposes the Enable Dynamic Redirect switch', async ({ page }) => {
+    await linksPage.clickCreateNew();
+    await expandDrawerPanel(page, 'Dynamic Redirects');
+    const dr = page.locator('.bl-dr');
+    await expect(dr).toBeVisible();
+    await expect(dr.locator('.bl-dr__enable-title')).toContainText(/Enable Dynamic Redirect/i);
+    await expect(dr.locator('.bl-dr__switch input')).toBeAttached();
+  });
+
+  test('enabling the switch reveals the rotation configuration', async ({ page }) => {
+    await linksPage.clickCreateNew();
+    await expandDrawerPanel(page, 'Dynamic Redirects');
+    await page.locator('.bl-dr__switch').first().click();
+    await page.waitForTimeout(1500);
+
+    const panelText = ((await page.locator(S.linkForm.dynamicRedirectPanel).textContent()) || '').toLowerCase();
+    const configurator = await page.locator('.bl-dr-full, .bl-dr__panel').first().isVisible({ timeout: 6000 }).catch(() => false);
+    expect(configurator || /rotat|split|variant|geo|device/.test(panelText)).toBeTruthy();
+  });
+
+  test('a rotation rule saved over REST is stored on the link', async ({ page }) => {
     const slug = uniqueSlug('split');
-    await linksPage.clickCreateNew();
-    await linksPage.fillLinkForm({
-      title: `Split Test ${slug}`,
+    // Shape the Pro plugin actually persists: { type, value: [{ link, weight }], extra }.
+    // Anything else is normalised away to an empty `value`.
+    const rule = {
+      type: 'rotation',
+      value: [
+        { link: 'https://example.com/variant-a', weight: 50 },
+        { link: 'https://example.com/variant-b', weight: 50 },
+      ],
+      extra: { rotation_mode: 'weighted', split_test: '0' },
+    };
+    const res = await api.createLink({
+      title: `Split ${slug}`,
       targetUrl: 'https://example.com/variant-a',
       slug,
+      extra: { dynamic_redirect: rule },
     });
+    const id = res.data?.data?.ID;
+    expect(id).toBeTruthy();
+    createdIds.push(id);
 
-    // Expand Dynamic Redirects panel
-    const panels = linksPage.modal.locator('.link-options__head');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text.toLowerCase().includes('dynamic')) {
-        await panels.nth(i).click();
-        await page.waitForTimeout(500);
-        break;
-      }
-    }
-
-    // Look for "Add" or "+" button INSIDE the modal's dynamic redirect section
-    const dynamicSection = linksPage.modal.locator('.link-options__body').last();
-    const addBtn = dynamicSection.locator('button, a').filter({ hasText: /Add|Plus|\+/i }).first();
-
-    if (await addBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await addBtn.click();
-      await page.waitForTimeout(300);
-
-      // Fill variant URL — some inputs may be disabled placeholder examples
-      // Find an enabled input to fill
-      const variantInputs = dynamicSection.locator('input[type="text"]:not([disabled]), input[type="url"]:not([disabled])');
-      const inputCount = await variantInputs.count();
-      if (inputCount > 0) {
-        await variantInputs.last().fill('https://example.com/variant-b');
-      }
-    }
-
-    // Scroll down and publish — may need to force click if overlay is blocking
-    await page.evaluate(() => {
-      const modal = document.querySelector('.ReactModal__Content');
-      if (modal) modal.scrollTop = modal.scrollHeight;
-    });
-    await page.waitForTimeout(300);
-
-    // Use force click since dynamic redirect panel may have overlays
-    await linksPage.submitButton.click({ force: true });
-    await waitForToast(page, 'success').catch(() => null);
+    const link = await api.findLinkBySlug(slug);
+    expect(link).toBeTruthy();
+    const stored = typeof link.dynamic_redirect === 'string' ? link.dynamic_redirect : JSON.stringify(link.dynamic_redirect || {});
+    expect(stored).toContain('variant-a');
+    expect(stored).toContain('variant-b');
+    expect(stored).toContain('rotation');
   });
 
-  test('should configure geolocation-based redirect', async ({ page }) => {
-    // COMMENT: Geolocation redirect requires selecting countries and target URLs.
-    // Steps for live site: select geographic type → add country rules.
-    const slug = uniqueSlug('geo');
-    await linksPage.clickCreateNew();
-    await linksPage.fillLinkForm({
-      title: `Geo Redirect ${slug}`,
-      targetUrl: 'https://example.com/default',
+  test('a rotating link redirects to one of its variants', async ({ page, context }) => {
+    const slug = uniqueSlug('split');
+    const rule = {
+      type: 'rotation',
+      value: [
+        { link: 'https://example.com/variant-a', weight: 50 },
+        { link: 'https://example.com/variant-b', weight: 50 },
+      ],
+      extra: { rotation_mode: 'weighted', split_test: '0' },
+    };
+    const res = await api.createLink({
+      title: `Split Visit ${slug}`,
+      targetUrl: 'https://example.com/variant-a',
       slug,
+      extra: { dynamic_redirect: rule },
     });
-    await linksPage.closeModalButton.click();
+    const id = res.data?.data?.ID;
+    expect(id).toBeTruthy();
+    createdIds.push(id);
+
+    const visitor = await context.browser().newContext({ ignoreHTTPSErrors: true });
+    const landings = [];
+    for (let i = 0; i < 3; i++) {
+      const visit = await visitor.newPage();
+      await visit.goto(`${process.env.BASE_URL}/${slug}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      landings.push(visit.url());
+      await visit.close();
+    }
+    await visitor.close();
+
+    for (const url of landings) {
+      expect(url, `rotation sent a visitor to ${url}`).toMatch(/variant-(a|b)/);
+    }
   });
 
-  test('split test distributes traffic between variants', async ({ page }) => {
-    // COMMENT: Requires live site with split test configured.
-    expect(true).toBeTruthy();
+  test('split-test analytics endpoint responds for a link', async ({ page }) => {
+    const slug = uniqueSlug('split');
+    const res = await api.createLink({ title: `Split Report ${slug}`, slug, trackMe: true });
+    const id = res.data?.data?.ID;
+    createdIds.push(id);
+
+    const report = await api.request('GET', `betterlinks/v1/clicks/splittest/${id}`);
+    expect(report.status).toBe(200);
+  });
+
+  test('geolocation endpoints backing geo redirects respond', async () => {
+    const detect = await api.request('GET', 'betterlinks/v1/geolocation/detect');
+    expect(detect.status).toBeLessThan(500);
   });
 });

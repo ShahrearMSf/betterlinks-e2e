@@ -1,13 +1,14 @@
 const { test, expect } = require('@playwright/test');
 const { CategoriesTagsPage } = require('../../pages/CategoriesTagsPage');
+const { ManageLinksPage } = require('../../pages/ManageLinksPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { waitForAppReady, waitForToast } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
 /**
- * Extended CRUD for tags & categories — covers creation, duplicate-prevention,
- * edit, and deletion via both UI and REST API. Uses test-prefixed names so
- * the global cleanup hook removes any leftovers.
+ * Extended CRUD for tags & categories (BetterLinks 3.x) — creation,
+ * duplicate-prevention, search, deletion via both UI and REST. Uses
+ * test-prefixed names so the global cleanup hook removes any leftovers.
  */
 test.describe('Tags & Categories — Extended CRUD', () => {
   let termsPage;
@@ -19,79 +20,104 @@ test.describe('Tags & Categories — Extended CRUD', () => {
     api = new BetterLinksAPI(page);
   });
 
-  test('create category via UI and confirm it appears in list', async ({ page }) => {
+  test('create category via UI and confirm it appears in list', async () => {
     await termsPage.gotoCategories();
     const name = `E2ECat${Date.now()}`;
-    await termsPage.createCategory(name);
-    const exists = await termsPage.termExists(name);
-    expect(exists).toBeTruthy();
+    await termsPage.createTerm(name, 'category');
+    expect(await termsPage.termExists(name)).toBeTruthy();
   });
 
-  test('create category via REST, then delete it via REST', async ({ page }) => {
+  test('create category via REST, then delete it via REST', async () => {
     const name = `E2ECat${Date.now()}`;
     const create = await api.createCategory(name);
     expect(create.status).toBeLessThan(300);
     const term = create.data?.data || create.data;
-    const id = term?.term_id || term?.ID || term?.id;
-    if (!id) test.skip(true, 'no id returned from create');
+    const id = term?.ID || term?.term_id || term?.id;
+    expect(id, 'create response should carry the new term id').toBeTruthy();
+
     const del = await api.deleteTerm(id, 'category');
     expect(del.status).toBeLessThan(300);
+
+    const cats = await api.listTerms('category');
+    expect(cats.some((c) => String(c.ID) === String(id))).toBeFalsy();
   });
 
-  test('create tag via UI, verify exists, delete, verify gone', async ({ page }) => {
+  test('create tag via UI, verify exists, delete, verify gone', async () => {
     await termsPage.gotoTags();
     const name = `e2etag${Date.now()}`;
-    await termsPage.createTag(name);
-    const exists = await termsPage.termExists(name);
-    expect(exists).toBeTruthy();
+    await termsPage.createTerm(name, 'tag');
+    expect(await termsPage.termExists(name)).toBeTruthy();
 
     await termsPage.deleteTerm(name);
-    const stillThere = await termsPage.termExists(name);
-    expect(stillThere).toBeFalsy();
+    expect(await termsPage.termExists(name)).toBeFalsy();
   });
 
-  test('creating a category with an existing name is rejected or de-duped', async ({ page }) => {
+  test('creating a category with an existing name is rejected or de-duped', async () => {
     const name = `E2ECat${Date.now()}`;
     const a = await api.createCategory(name);
     expect(a.status).toBeLessThan(300);
-    const b = await api.createCategory(name);
-    // BetterLinks either returns an error status, or a success with no new id.
-    // We accept both paths — the point is no duplicate row should persist.
-    const terms = await api.getTerms();
-    const list = terms?.data?.data?.category || [];
-    const matches = (Array.isArray(list) ? list : []).filter(t => (t.term_name || t.name) === name);
+    await api.createCategory(name);
+
+    // 3.x terms come back as a flat array; there must be at most one match.
+    const cats = await api.listTerms('category');
+    const matches = cats.filter((t) => t.term_name === name);
     expect(matches.length).toBeLessThanOrEqual(1);
+
+    for (const m of matches) await api.deleteTerm(m.ID, 'category');
   });
 
-  test('Uncategorized category cannot be deleted (default)', async ({ page }) => {
+  test('duplicate name is blocked in the term modal', async ({ page }) => {
     await termsPage.gotoCategories();
-    const uncat = termsPage.termRow('Uncategorized');
-    await expect(uncat).toBeVisible({ timeout: 5000 });
-    const disabled = uncat.locator('button[disabled]');
-    expect(await disabled.count()).toBeGreaterThan(0);
+    const name = `E2ECat${Date.now()}`;
+    await termsPage.createTerm(name, 'category');
+
+    await termsPage.openCreateModal('category');
+    await termsPage.nameInput.fill(name);
+    await page.waitForTimeout(600);
+    // The modal shows an inline error and disables submit for a duplicate.
+    const errorVisible = await termsPage.modalError.isVisible({ timeout: 3000 }).catch(() => false);
+    const submitDisabled = await termsPage.submitButton.isDisabled().catch(() => false);
+    expect(errorVisible || submitDisabled).toBeTruthy();
+    await page.locator(S.terms.modalCancel).first().click();
   });
 
-  test('category appears in link form category dropdown', async ({ page }) => {
+  test('Uncategorized category cannot be deleted (default)', async () => {
+    await termsPage.gotoCategories();
+    await expect(await termsPage.search('Uncategorized')).toBeVisible({ timeout: 8000 });
+    expect(await termsPage.canDelete('Uncategorized')).toBeFalsy();
+  });
+
+  test('search filters the term table', async () => {
+    await termsPage.gotoCategories();
+    const name = `E2ECat${Date.now()}`;
+    await termsPage.createTerm(name, 'category');
+
+    await termsPage.search(name);
+    const rows = await termsPage.rows.count();
+    expect(rows).toBeGreaterThan(0);
+    await expect(termsPage.termRow(name)).toBeVisible();
+    await termsPage.clearSearch();
+  });
+
+  test('category appears in the link drawer category dropdown', async ({ page }) => {
     const name = `E2ECat${Date.now()}`;
     await api.createCategory(name);
-    await page.goto('/wp-admin/admin.php?page=betterlinks', { waitUntil: 'domcontentloaded' });
-    await waitForAppReady(page);
-    await page.locator('.btl-create-link-button').first().click();
-    await page.locator('.ReactModal__Content').waitFor({ state: 'visible', timeout: 10000 });
-    // The category select is a react-select; opening it shows the options
-    const catSelect = page.locator('.ReactModal__Content [class*="react-select"]').first();
-    await catSelect.click({ force: true }).catch(() => {});
-    await page.waitForTimeout(500);
-    const option = page.locator('[class*="option"]').filter({ hasText: name }).first();
-    // Soft assertion — the dropdown DOM might differ; we just ensure creation worked
-    const found = await option.isVisible({ timeout: 3000 }).catch(() => false);
-    expect(typeof found).toBe('boolean');
-    await page.locator('.btl-close-modal').first().click({ force: true });
+
+    const linksPage = new ManageLinksPage(page);
+    await linksPage.goto();
+    await linksPage.clickCreateNew();
+    await page.locator(S.linkForm.categorySelect).first().click();
+    await page.waitForTimeout(700);
+    const option = page.locator('[class*="-option"]').filter({ hasText: name }).first();
+    await expect(option).toBeVisible({ timeout: 8000 });
+    await page.keyboard.press('Escape');
+    await linksPage.closeDrawer();
   });
 
-  test('tags list shows column headers (Tags, Slug, Action)', async ({ page }) => {
+  test('tags table shows its column headers', async () => {
     await termsPage.gotoTags();
-    const body = await page.locator('#betterlinksbody').textContent();
-    expect(body).toContain('Action');
+    const headers = (await termsPage.columnHeaders()).map((h) => h.toLowerCase());
+    expect(headers.some((h) => h.includes('tag'))).toBeTruthy();
+    expect(headers.some((h) => h.includes('action'))).toBeTruthy();
   });
 });
