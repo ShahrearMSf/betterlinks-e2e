@@ -1,5 +1,5 @@
 /**
- * Common utility functions for BetterLinks E2E tests.
+ * Common utility functions for BetterLinks E2E tests (BetterLinks 3.x UI).
  */
 
 const DB_ERROR_TEXT = 'Error establishing a database connection';
@@ -48,11 +48,16 @@ async function safeGoto(page, url) {
   }
 }
 
-/** Wait for BetterLinks React app to fully load */
+/**
+ * Wait for the BetterLinks React app to finish its first paint.
+ * 3.x lazy-loads every page behind a Suspense fallback (`.betterlinks-loading`),
+ * so waiting for the root node alone is not enough.
+ */
 async function waitForAppReady(page) {
   await page.waitForSelector('#betterlinksbody', { state: 'attached', timeout: 30000 });
-  // Small buffer for React to finish rendering
-  await page.waitForTimeout(1000);
+  // The Suspense spinner is only mounted while a page chunk is downloading.
+  await page.locator('.betterlinks-loading').waitFor({ state: 'detached', timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1200);
 }
 
 /** Navigate to a BetterLinks admin page */
@@ -62,9 +67,8 @@ async function navigateTo(page, slug) {
 }
 
 /**
- * Wait for BetterLinks custom toast notification.
- * BetterLinks uses its own toast system with classes:
- *   .btl-toast-item .btl-toast-success / .btl-toast-error
+ * Wait for a BetterLinks toast notification.
+ * Unchanged across 2.x → 3.x: `.btl-toast-item .btl-toast-success/.btl-toast-error`.
  */
 async function waitForToast(page, type = 'success') {
   const selector = `.btl-toast-${type}`;
@@ -82,10 +86,95 @@ async function dismissToast(page) {
   }
 }
 
+/**
+ * Dismiss the "BetterLinks Pro 3.0 New UI is here!" admin notice, which
+ * overlaps the top of every page and can intercept clicks.
+ */
+async function dismissAdminNotice(page) {
+  const dismiss = page.locator('.btl-dashboard-notice .notice-dismiss').first();
+  if (await dismiss.isVisible({ timeout: 1500 }).catch(() => false)) {
+    await dismiss.click().catch(() => {});
+    await page.waitForTimeout(300);
+  }
+}
+
 /** Click a WordPress admin submenu link */
 async function clickSubMenu(page, menuText) {
   await page.locator('#toplevel_page_betterlinks .wp-submenu a', { hasText: menuText }).click();
   await waitForAppReady(page);
+}
+
+/**
+ * Pick an option in one of the react-select dropdowns used throughout the 3.x
+ * UI (redirect type, category, tags, filters). `control` is a locator for the
+ * `.btl-react-select__control` / `.bl-rs__control` element.
+ */
+async function selectReactOption(page, control, optionText) {
+  await control.click();
+  await page.waitForTimeout(400);
+  const option = page
+    .locator('[class*="-option"], .bl-opt__label, [id^="react-select"][id*="option"]')
+    .filter({ hasText: new RegExp(optionText, 'i') })
+    .first();
+  if (await option.isVisible({ timeout: 4000 }).catch(() => false)) {
+    await option.click();
+    await page.waitForTimeout(300);
+    return true;
+  }
+  // Fall back to typing + Enter for creatable selects (tags).
+  await page.keyboard.type(optionText);
+  await page.waitForTimeout(600);
+  await page.keyboard.press('Enter');
+  return false;
+}
+
+/**
+ * Toggle one of the hidden `input.btl-check` checkboxes in the link drawer by
+ * clicking its wrapping label (the input itself is visually hidden by CSS).
+ */
+async function setCheckbox(page, name, enabled, scope = '.bl-drawer') {
+  const isChecked = await page.evaluate(
+    ([name, scope]) => {
+      const input = document.querySelector(`${scope} input.btl-check[name="${name}"]`);
+      return input ? input.checked : null;
+    },
+    [name, scope]
+  );
+  if (isChecked === null) return false;
+  if (isChecked !== enabled) {
+    await page.evaluate(
+      ([name, scope]) => {
+        const input = document.querySelector(`${scope} input.btl-check[name="${name}"]`);
+        if (input) (input.closest('label') || input).click();
+      },
+      [name, scope]
+    );
+    await page.waitForTimeout(250);
+  }
+  return true;
+}
+
+/** Read a hidden `input.btl-check` value inside a scope. */
+async function isChecked(page, name, scope = '.bl-drawer') {
+  return page.evaluate(
+    ([name, scope]) => {
+      const input = document.querySelector(`${scope} input.btl-check[name="${name}"]`);
+      return input ? input.checked : false;
+    },
+    [name, scope]
+  );
+}
+
+/** Expand a collapsible link-drawer panel ("Link Options" / "Advanced" / …). */
+async function expandDrawerPanel(page, title) {
+  const panel = page.locator('.link-options').filter({ hasText: new RegExp(title, 'i') }).first();
+  if (!(await panel.isVisible({ timeout: 3000 }).catch(() => false))) return false;
+  const isOpen = await panel.evaluate((el) => el.className.includes('link-options--open'));
+  if (!isOpen) {
+    await panel.locator('.link-options__head').first().click();
+    await page.waitForTimeout(500);
+  }
+  return true;
 }
 
 /** Get today's date in YYYY-MM-DD format */
@@ -108,7 +197,12 @@ module.exports = {
   handleEmailVerification,
   waitForToast,
   dismissToast,
+  dismissAdminNotice,
   clickSubMenu,
+  selectReactOption,
+  setCheckbox,
+  isChecked,
+  expandDrawerPanel,
   today,
   daysAgo,
 };
