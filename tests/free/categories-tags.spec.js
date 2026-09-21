@@ -1,9 +1,14 @@
 const { test, expect } = require('@playwright/test');
 const { CategoriesTagsPage } = require('../../pages/CategoriesTagsPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { waitForAppReady, waitForToast } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
 
+/**
+ * Tags & Categories — BetterLinks 3.x.
+ * One `.bl-tc__table` with a Tags/Categories pill toggle and a shared
+ * `.bl-term-modal` (name only — 3.x derives the slug from the name).
+ */
 test.describe('Categories & Tags Management', () => {
   let termsPage;
 
@@ -13,114 +18,106 @@ test.describe('Categories & Tags Management', () => {
   });
 
   test('should load Tags & Categories page', async ({ page }) => {
-    await expect(page.locator('#betterlinksbody')).toBeVisible();
+    await expect(page.locator(S.app.root)).toBeVisible();
     await expect(page).toHaveURL(/manage-tags-and-categories/);
+    await expect(termsPage.heading).toContainText(/Tags/i);
   });
 
-  // --- Categories ---
-  test('should open Add New Category modal and create', async ({ page }) => {
+  test('page shows Tags / Categories tabs with counts and stat cards', async () => {
+    await expect(termsPage.tab('Tags')).toBeVisible();
+    await expect(termsPage.tab('Categories')).toBeVisible();
+    expect(await termsPage.statCards.count()).toBeGreaterThan(0);
+  });
+
+  test('table renders the expected column headers', async () => {
+    await termsPage.gotoCategories();
+    const headers = (await termsPage.columnHeaders()).map((h) => h.toLowerCase());
+    expect(headers.some((h) => h.includes('category'))).toBeTruthy();
+    expect(headers.some((h) => h.includes('links'))).toBeTruthy();
+    expect(headers.some((h) => h.includes('clicks'))).toBeTruthy();
+    expect(headers.some((h) => h.includes('action'))).toBeTruthy();
+  });
+
+  test('should open the Add New modal and create a category', async ({ page }) => {
     await termsPage.gotoCategories();
     const name = `TestCat${Date.now()}`;
-    await termsPage.addNewCategoryButton.click();
-    const modal = page.locator('.ReactModal__Content');
-    await modal.waitFor({ state: 'visible', timeout: 5000 });
 
-    // Modal should have Category input and Publish button
-    await expect(page.locator('.ReactModal__Content #term_name')).toBeVisible();
-    await page.locator('.ReactModal__Content #term_name').fill(name);
-    await page.locator('.ReactModal__Content .btl-modal-submit-button').click();
+    await termsPage.openCreateModal('category');
+    await expect(termsPage.modal).toBeVisible();
+    await expect(termsPage.nameInput).toBeVisible();
+    await termsPage.nameInput.fill(name);
+    await termsPage.submitButton.click();
+    await page.waitForTimeout(1500);
 
-    // Toast should appear
-    await waitForToast(page, 'success').catch(() => null);
-    await page.waitForTimeout(1000);
+    expect(await termsPage.termExists(name)).toBeTruthy();
   });
 
-  test('should show categories in DataTable', async ({ page }) => {
+  test('Uncategorized exists and cannot be deleted', async () => {
     await termsPage.gotoCategories();
-    // The table should have column headers
-    const content = await page.locator('#betterlinksbody').textContent();
-    expect(content).toContain('Categories');
-    expect(content).toContain('Link Count');
-    expect(content).toContain('Action');
+    const row = await termsPage.search('Uncategorized');
+    await expect(row).toBeVisible({ timeout: 8000 });
+    expect(await termsPage.canDelete('Uncategorized')).toBeFalsy();
   });
 
-  test('Uncategorized should exist and not be deletable', async ({ page }) => {
+  test('clicking a category row action opens the edit modal', async ({ page }) => {
     await termsPage.gotoCategories();
-    const uncatRow = termsPage.termRow('Uncategorized');
-    await expect(uncatRow).toBeVisible({ timeout: 5000 });
-    // Uncategorized (ID=1) has disabled buttons
-    const disabledBtn = uncatRow.locator('button[disabled]').first();
-    await expect(disabledBtn).toBeVisible();
+    const name = `TestCat${Date.now()}`;
+    await termsPage.createTerm(name, 'category');
+
+    await termsPage.editTerm(name, null);
+    await expect(termsPage.modal).toBeVisible();
+    await expect(termsPage.modalTitle).toContainText(/Edit/i);
+    await expect(termsPage.nameInput).toHaveValue(name);
+    await page.locator(S.terms.modalCancel).first().click();
   });
 
-  test('should edit a category via name click', async ({ page }) => {
+  test('should rename a category', async () => {
     await termsPage.gotoCategories();
-    // Click on "Uncategorized" name — which should be a button in the first gridcell
-    // Uncategorized is ID=1, which can't be edited — use a non-default category
-    // Find any non-Uncategorized row
-    const rows = page.locator('[role="row"]').filter({ hasText: /Cat/ });
-    const count = await rows.count();
-    if (count > 1) {
-      // Click the name button of the second row (skip header + Uncategorized)
-      const row = rows.nth(1);
-      const nameBtn = row.locator('[role="gridcell"]').first().locator('button').first();
-      if (await nameBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await nameBtn.click();
-        const modal = page.locator('.ReactModal__Content');
-        if (await modal.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await expect(page.locator('.ReactModal__Content #term_name')).toBeVisible();
-        }
-      }
-    }
+    const name = `TestCat${Date.now()}`;
+    const renamed = `${name}Renamed`;
+    await termsPage.createTerm(name, 'category');
+
+    await termsPage.editTerm(name, renamed);
+    expect(await termsPage.termExists(renamed)).toBeTruthy();
   });
 
-  test('should delete a category', async ({ page }) => {
+  test('should delete a category', async () => {
     await termsPage.gotoCategories();
-    // Find a deletable row (not Uncategorized)
-    const rows = page.locator('[role="row"]').filter({ hasText: /Cat/ });
-    const count = await rows.count();
-    if (count > 1) {
-      const row = rows.last();
-      const actionCell = row.locator('[role="gridcell"]').last();
-      const deleteBtn = actionCell.locator('button').last();
-      if (await deleteBtn.isEnabled()) {
-        await deleteBtn.click();
-        // Confirm deletion
-        const yesBtn = page.locator('.btl-confirm-message .action.yes').first();
-        if (await yesBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-          // Force-click to survive transient React re-render races on live
-          await yesBtn.click({ force: true }).catch(async () => {
-            await page.locator('.btl-confirm-message .action.yes').first().click({ force: true });
-          });
-          await page.waitForTimeout(1500);
-        }
-      }
-    }
-  });
-
-  // --- Tags ---
-  test('should create a new tag', async ({ page }) => {
-    await termsPage.gotoTags();
-    const name = `testtag${Date.now()}`;
-    await termsPage.createTag(name);
-    const exists = await termsPage.termExists(name);
-    expect(exists).toBeTruthy();
-  });
-
-  test('should delete a tag', async ({ page }) => {
-    await termsPage.gotoTags();
-    const name = `deltag${Date.now()}`;
-    await termsPage.createTag(name);
+    const name = `TestCat${Date.now()}`;
+    await termsPage.createTerm(name, 'category');
+    expect(await termsPage.termExists(name)).toBeTruthy();
 
     await termsPage.deleteTerm(name);
-    const exists = await termsPage.termExists(name);
-    expect(exists).toBeFalsy();
+    expect(await termsPage.termExists(name)).toBeFalsy();
   });
 
-  test('should create category via API', async ({ page }) => {
+  test('should create a new tag', async () => {
+    await termsPage.gotoTags();
+    const name = `testtag${Date.now()}`;
+    await termsPage.createTerm(name, 'tag');
+    expect(await termsPage.termExists(name)).toBeTruthy();
+  });
+
+  test('should delete a tag', async () => {
+    await termsPage.gotoTags();
+    const name = `deltag${Date.now()}`;
+    await termsPage.createTerm(name, 'tag');
+    await termsPage.deleteTerm(name);
+    expect(await termsPage.termExists(name)).toBeFalsy();
+  });
+
+  test('should create a category via REST', async ({ page }) => {
     const api = new BetterLinksAPI(page);
     const catName = `APICat${Date.now()}`;
     const res = await api.createCategory(catName);
     expect(res.status).toBeLessThan(300);
+
+    // 3.x returns a flat term list — the new category must be in it.
+    const cats = await api.listTerms('category');
+    expect(cats.some((c) => c.term_name === catName)).toBeTruthy();
+
+    const created = res.data?.data || {};
+    const id = created.ID || created.term_id;
+    if (id) await api.deleteTerm(id, 'category');
   });
 });
