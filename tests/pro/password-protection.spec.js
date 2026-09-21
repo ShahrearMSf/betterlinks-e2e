@@ -1,12 +1,26 @@
 const { test, expect } = require('@playwright/test');
 const { ManageLinksPage } = require('../../pages/ManageLinksPage');
+const { SettingsPage } = require('../../pages/SettingsPage');
 const { BetterLinksAPI } = require('../../helpers/api');
-const { uniqueSlug, waitForAppReady, waitForToast } = require('../../helpers/utils');
+const { uniqueSlug, expandDrawerPanel } = require('../../helpers/utils');
+const S = require('../../helpers/selectors');
 require('dotenv').config();
+
+/**
+ * Password protection (Pro) — BetterLinks 3.x.
+ *
+ * 3.0 turned this into a *feature module*: Settings → Tools → Feature Modules →
+ * "Password Protection" → Configure, which holds the "Password Protected
+ * Redirect" switch. Only once that is on does the link drawer offer the
+ * password fields. Tests that need the per-link UI skip cleanly when the
+ * module is off rather than silently passing.
+ */
+const PASSWORD = 'E2ePass!2026';
 
 test.describe('Password Protection (Pro)', () => {
   let linksPage;
   let api;
+  const createdIds = [];
 
   test.beforeEach(async ({ page }) => {
     linksPage = new ManageLinksPage(page);
@@ -14,107 +28,93 @@ test.describe('Password Protection (Pro)', () => {
     api = new BetterLinksAPI(page);
   });
 
-  test('should show password protection option in link form', async ({ page }) => {
-    await linksPage.clickCreateNew();
-
-    // Expand ALL collapsible panels to find password protection
-    const panels = linksPage.modal.locator('.link-options__head');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      await panels.nth(i).click();
-      await page.waitForTimeout(300);
+  test.afterEach(async () => {
+    while (createdIds.length) {
+      const id = createdIds.pop();
+      await api.deleteLink(id).catch(() => {});
     }
-
-    // Scroll the modal's right panel to reveal all content
-    await page.evaluate(() => {
-      const rightPanel = document.querySelector('.ReactModal__Content .btl-entry-content-right');
-      if (rightPanel) rightPanel.scrollTop = rightPanel.scrollHeight;
-    });
-    await page.waitForTimeout(500);
-
-    // Check for password protection in DOM — requires Pro plugin to be fully activated
-    const hasPassword = await page.evaluate(() => {
-      const el = document.querySelector('.ReactModal__Content');
-      if (!el) return false;
-      const html = el.innerHTML.toLowerCase();
-      return html.includes('password') || html.includes('enable_password_protection');
-    });
-
-    // COMMENT: Password Protection UI renders inside the "Advanced" panel via a Pro filter hook.
-    // It may not render if the Pro JS bundle isn't loaded, or if the feature
-    // requires a specific settings toggle. On localhost without full Pro license activation,
-    // the password protection fields might not appear even though is_pro_enabled is true.
-    // This test verifies the feature is available when Pro is properly configured.
-    if (!hasPassword) {
-      test.info().annotations.push({ type: 'info', description: 'Password protection UI not rendered — may need Pro license activation or settings toggle' });
-    }
-    // Soft assertion — pass but annotate
-    expect(true).toBeTruthy();
   });
 
-  test('should enable password protection and set password', async ({ page }) => {
+  test('Feature Modules lists Password Protection', async ({ page }) => {
+    const settings = new SettingsPage(page);
+    await settings.goto('feature-modules');
+    const card = page.locator('.bl-module-card').filter({ hasText: /Password Protection/i }).first();
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await expect(card).toContainText(/Gate short links behind a password/i);
+  });
+
+  test('the module has a configuration screen', async ({ page }) => {
+    const settings = new SettingsPage(page);
+    await settings.goto('feature-modules');
+    const card = page.locator('.bl-module-card').filter({ hasText: /Password Protection/i }).first();
+    await card.locator('.bl-module-card__link').first().click();
+    await page.waitForTimeout(2500);
+    const content = page.locator(S.settings.content);
+    await expect(content).toContainText(/Password Protection/i);
+    await expect(content).toContainText(/Password Protected Redirect/i);
+  });
+
+  async function passwordUiInDrawer(page) {
+    await linksPage.clickCreateNew();
+    await expandDrawerPanel(page, 'Advanced');
+    const enable = page.locator('input[name="enable_password_protection"], #btl-link-password');
+    return (await enable.count()) > 0;
+  }
+
+  test('link drawer offers password protection when the module is on', async ({ page }) => {
+    const available = await passwordUiInDrawer(page);
+    test.skip(!available, 'Password Protection module is off — enable it in Settings → Feature Modules');
+    await expect(page.locator('input[name="enable_password_protection"]').first()).toBeAttached();
+  });
+
+  test('a password can be set on a link', async ({ page }) => {
+    const available = await passwordUiInDrawer(page);
+    test.skip(!available, 'Password Protection module is off');
+
     const slug = uniqueSlug('password');
-    await linksPage.clickCreateNew();
-    await linksPage.fillLinkForm({
-      title: `Password Test ${slug}`,
-      targetUrl: 'https://example.com/password-test',
-      slug,
-    });
-
-    // Expand "Advanced" panel
-    const advancedPanel = linksPage.modal.locator('.link-options__head').filter({ hasText: /Advanced/i }).first();
-    if (await advancedPanel.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await advancedPanel.click();
-      await page.waitForTimeout(500);
-    }
-
-    // Enable password protection — find the checkbox by evaluating DOM
-    const enabled = await page.evaluate(() => {
-      const checkbox = document.querySelector('.ReactModal__Content input[name*="password_protection"], .ReactModal__Content input[name*="enable_password"]');
-      if (checkbox && !checkbox.checked) {
-        checkbox.closest('label')?.click();
-        return true;
-      }
-      return !!checkbox;
-    });
-
-    if (enabled) {
-      await page.waitForTimeout(500);
-      const passwordInput = page.locator('.ReactModal__Content input[name="password"], .ReactModal__Content input[type="password"]').first();
-      if (await passwordInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await passwordInput.fill('test123');
-      }
-    }
-
+    await linksPage.fillLinkForm({ title: `Password ${slug}`, targetUrl: 'https://example.com/protected', slug });
+    await page.locator('input[name="enable_password_protection"]').first().click({ force: true });
+    await page.waitForTimeout(600);
+    await page.locator('#btl-link-password').fill(PASSWORD);
     await linksPage.publishLink();
+
+    const link = await api.findLinkBySlug(slug);
+    expect(link).toBeTruthy();
+    createdIds.push(link.ID);
   });
 
-  test('password-protected link should show password form', async ({ page, context }) => {
-    // COMMENT: Setting password requires AJAX call to betterlinkspro/admin/create_links_password.
-    // On live site: create link with password → visit link → verify password form appears.
+  test('a protected link asks for the password before redirecting', async ({ page, context }) => {
+    const available = await passwordUiInDrawer(page);
+    test.skip(!available, 'Password Protection module is off');
+
     const slug = uniqueSlug('pw-form');
-    await api.createLink({
-      title: `PW Form Test ${slug}`,
-      targetUrl: 'https://example.com/pw-form',
-      slug,
-    });
+    await linksPage.fillLinkForm({ title: `Password Form ${slug}`, targetUrl: 'https://example.com/protected-form', slug });
+    await page.locator('input[name="enable_password_protection"]').first().click({ force: true });
+    await page.waitForTimeout(600);
+    await page.locator('#btl-link-password').fill(PASSWORD);
+    await linksPage.publishLink();
 
-    const newPage = await context.newPage();
-    await newPage.goto(`${process.env.BASE_URL}/${slug}`, { waitUntil: 'domcontentloaded' });
-    const url = newPage.url();
-    expect(url).toBeTruthy();
-    await newPage.close();
-  });
+    const link = await api.findLinkBySlug(slug);
+    test.skip(!link, 'protected link was not created');
+    createdIds.push(link.ID);
 
-  test('should not redirect with wrong password', async ({ page }) => {
-    // COMMENT: Requires password-protected link set up via AJAX.
-    // Steps for live site: visit link → enter wrong password → verify stays on form.
-    expect(true).toBeTruthy();
-  });
+    const visitor = await context.browser().newContext({ ignoreHTTPSErrors: true });
+    const visit = await visitor.newPage();
+    await visit.goto(`${process.env.BASE_URL}/${slug}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    expect(visit.url(), 'a protected link must not redirect straight through').not.toContain('example.com/protected-form');
+    await expect(visit.locator('input[type="password"]')).toBeVisible({ timeout: 15000 });
 
-  test('should redirect with correct password', async ({ page }) => {
-    // COMMENT: Requires password-protected link set up via AJAX.
-    // Steps for live site: visit link → enter correct password → verify redirect.
-    expect(true).toBeTruthy();
+    // Wrong password keeps the visitor on the form…
+    await visit.locator('input[type="password"]').fill('definitely-wrong');
+    await visit.locator('button[type="submit"], input[type="submit"]').first().click().catch(() => {});
+    await visit.waitForTimeout(2500);
+    expect(visit.url()).not.toContain('example.com/protected-form');
+
+    // …the right one lets them through.
+    await visit.locator('input[type="password"]').fill(PASSWORD);
+    await visit.locator('button[type="submit"], input[type="submit"]').first().click().catch(() => {});
+    await visit.waitForTimeout(4000);
+    expect(visit.url()).toContain('example.com');
+    await visitor.close();
   });
 });
