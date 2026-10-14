@@ -12,16 +12,36 @@ function uniqueSlug(prefix = 'test') {
 
 /**
  * Dismiss WP's "Administration email verification" interstitial if it appears.
- * Ported from notificationx-e2e/helpers/utils.js.
+ *
+ * WordPress serves this at `wp-login.php?action=confirm_admin_email` and the
+ * confirm control is `<input type="submit" name="correct-admin-email">` — not a
+ * link (see wp-login.php). Matching on `a:has-text("correct")` therefore hit
+ * nothing, the screen stayed up, and login never reached wp-admin.
+ *
+ * The screen also carries an `<a>` labelled "Update", which goes off to change
+ * the admin email, so the confirm control is addressed by id/name rather than
+ * by any loose text match.
  */
 async function handleEmailVerification(page) {
   try {
-    const correctEmailBtn = page.locator('a:has-text("correct")').first();
-    if (await correctEmailBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await correctEmailBtn.click();
-      await page.waitForLoadState('domcontentloaded').catch(() => {});
+    const confirmBtn = page
+      .locator('#correct-admin-email, input[name="correct-admin-email"]')
+      .first();
+    if (await confirmBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded').catch(() => {}),
+        confirmBtn.click(),
+      ]);
+      await page.waitForTimeout(500);
+      return true;
     }
-  } catch (e) { /* not on email screen */ }
+  } catch (e) { /* not on the email screen */ }
+  return false;
+}
+
+/** True while the browser is sitting on the admin-email interstitial. */
+function isOnEmailVerification(page) {
+  return page.url().includes('action=confirm_admin_email');
 }
 
 /**
@@ -195,6 +215,7 @@ module.exports = {
   navigateTo,
   safeGoto,
   handleEmailVerification,
+  isOnEmailVerification,
   waitForToast,
   dismissToast,
   dismissAdminNotice,
