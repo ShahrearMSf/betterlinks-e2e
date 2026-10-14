@@ -82,6 +82,21 @@ jobs:
           echo "flaky=$FLAKY" >> $GITHUB_OUTPUT
           echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
 
+      # The test step is continue-on-error because two specs fail on purpose to
+      # flag live defects, so a non-zero exit code alone cannot fail the job.
+      # But a setup failure skips every project and still reported a green run —
+      # that is how a total auth failure went unnoticed. Zero passing tests means
+      # the suite never actually ran, which is always a broken run.
+      - name: Fail the run when no test executed
+        if: always()
+        run: |
+          PASSED='${{ steps.parse-results.outputs.passed }}'
+          if [ "${PASSED:-0}" -eq 0 ]; then
+            echo "::error::No test passed — the suite did not run (check auth setup and the BASE_URL / ADMIN_USER / ADMIN_PASS secrets)."
+            exit 1
+          fi
+          echo "$PASSED test(s) passed; known intentional failures do not fail the job."
+
       - name: Upload HTML report
         uses: actions/upload-artifact@v4
         if: always()

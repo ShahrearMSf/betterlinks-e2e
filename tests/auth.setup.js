@@ -1,5 +1,5 @@
 const { test: setup, expect } = require('@playwright/test');
-const { handleEmailVerification, safeGoto } = require('../helpers/utils');
+const { handleEmailVerification, isOnEmailVerification, safeGoto } = require('../helpers/utils');
 require('dotenv').config();
 
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
@@ -12,16 +12,33 @@ async function attemptLogin(page) {
   const passField = page.locator('#user_pass');
   await userField.waitFor({ state: 'visible', timeout: 30000 });
 
+  // fill() sets the value in one step. Typing it key by key raced with the
+  // page still settling and silently dropped characters — one CI run reported
+  // `The username msf@ is not registered on this site`, i.e. the field kept
+  // only the first few keystrokes. Verify what actually landed before submit.
   await userField.click();
-  await userField.fill('');
-  await userField.pressSequentially(ADMIN_USER, { delay: 25 });
-
+  await userField.fill(ADMIN_USER);
   await passField.click();
-  await passField.fill('');
-  await passField.pressSequentially(ADMIN_PASS, { delay: 25 });
+  await passField.fill(ADMIN_PASS);
+
+  const typedUser = await userField.inputValue().catch(() => '');
+  if (typedUser !== ADMIN_USER) {
+    await userField.fill(ADMIN_USER);
+    const retyped = await userField.inputValue().catch(() => '');
+    if (retyped !== ADMIN_USER) {
+      return { ok: false, reason: `username field holds "${retyped}" instead of the configured user` };
+    }
+  }
 
   await page.locator('#wp-submit').click();
   await page.waitForLoadState('domcontentloaded').catch(() => {});
+
+  // WP can interpose the admin-email interstitial right after a correct login,
+  // and it is served from wp-login.php — so waiting for a wp-admin URL without
+  // clearing it first always times out.
+  for (let i = 0; i < 2 && isOnEmailVerification(page); i++) {
+    if (!(await handleEmailVerification(page))) break;
+  }
   await handleEmailVerification(page);
 
   // Did it actually land in wp-admin?
@@ -30,7 +47,7 @@ async function attemptLogin(page) {
     return { ok: true, reason: '' };
   } catch (e) {
     const body = await page.locator('body').innerText().catch(() => '');
-    return { ok: false, reason: body.slice(0, 200) };
+    return { ok: false, reason: `url=${page.url()} body=${body.slice(0, 200)}` };
   }
 }
 
